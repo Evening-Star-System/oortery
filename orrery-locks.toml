@@ -1,0 +1,18 @@
+schema = 1
+# Behavior locks: a shipped behavior held as a floor. A lock declares a behavior that
+# must never regress; the reconciler fails the release gate if it does. This file ships
+# empty on purpose: an empty manifest is "nothing to check", so a fresh project is
+# default-on and blocks nothing until you declare your first lock.
+#
+# To lock a behavior, from the repo root:
+#   ess-orrery lock add <id> --command "<one line that prints a canonical value>" --why "<why>"
+# That declares the lock AND captures its golden from a green run, in one step. Or declare
+# a [[locks]] block by hand (below) and run `ess-orrery lock capture <id>` once it is green.
+# See docs/behavior-locks-adopt.md.
+#
+# [[locks]]
+# id = "export-envelope-no-orphan-blobs"
+# why = "Fixed on the web path (92904af); the native twin regressed the same bug unseen."
+# command = "scripts/probe-orphan-blobs.sh"    # prints ONE canonical line
+# capture = "stdout-line"                        # how to read the command's output
+# golden = "orphaned_blobs=0 paths=web,native"   # written by `lock capture`; do not hand-edit

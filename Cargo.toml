@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/esp-core", "crates/esp"]
+
+[workspace.package]
+edition = "2021"
+license = "AGPL-3.0-or-later"
+rust-version = "1.80"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
