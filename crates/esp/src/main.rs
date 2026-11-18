@@ -7,6 +7,7 @@
 mod add_remote;
 mod constellation;
 mod folder_browser;
+mod mounts;
 mod syncs;
 
 use adw::prelude::*;
@@ -25,6 +26,7 @@ pub struct Ui {
     pub remotes_count: gtk::Label,
     pub node_count: Rc<Cell<usize>>,
     pub syncs_list: gtk::ListBox,
+    pub mounts_list: gtk::ListBox,
     pub active_label: gtk::Label,
     /// The operations daemon, started lazily the first time a job runs.
     pub rcd: RefCell<Option<Rc<esp_core::Rcd>>>,
@@ -155,6 +157,11 @@ const PAGES: &[PageDef] = &[
         icon: "emblem-synchronizing-symbolic",
     },
     PageDef {
+        name: "mounts",
+        title: "Mounts",
+        icon: "folder-symbolic",
+    },
+    PageDef {
         name: "backups",
         title: "Backups",
         icon: "drive-harddisk-symbolic",
@@ -175,9 +182,11 @@ fn build_ui(app: &adw::Application) {
     let (overview, remotes_count, active_label) = overview_page(provider_count, &node_count);
     let (remotes_widget, remotes_list) = remotes_page();
     let (syncs_widget, syncs_list, new_sync_btn) = syncs::page();
+    let (mounts_widget, mounts_list) = mounts::page();
     stack.add_named(&overview, Some("overview"));
     stack.add_named(&remotes_widget, Some("remotes"));
     stack.add_named(&syncs_widget, Some("syncs"));
+    stack.add_named(&mounts_widget, Some("mounts"));
     stack.add_named(
         &empty_page(
             "drive-harddisk-symbolic",
@@ -298,6 +307,7 @@ fn build_ui(app: &adw::Application) {
         remotes_count,
         node_count,
         syncs_list,
+        mounts_list,
         active_label,
         rcd: RefCell::new(None),
         active_syncs: Rc::new(Cell::new(0)),
@@ -305,6 +315,7 @@ fn build_ui(app: &adw::Application) {
     });
     refresh(&ui);
     syncs::refresh(&ui);
+    mounts::refresh(&ui);
 
     let ui_for_add = ui.clone();
     add_btn.connect_clicked(move |_| add_remote::present(&ui_for_add));

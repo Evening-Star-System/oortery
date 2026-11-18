@@ -213,6 +213,55 @@ pub fn list_dirs(port: u16, fs: &str, path: &str) -> Result<Vec<DirEntry>> {
     Ok(dirs)
 }
 
+/// A live FUSE mount, from `mount/listmounts`.
+#[derive(Clone, Debug)]
+pub struct Mount {
+    /// The fs that is mounted, e.g. "gdrive:".
+    pub fs: String,
+    /// Where it is mounted on this computer.
+    pub mount_point: String,
+}
+
+/// Mount `fs` (e.g. "gdrive:") at `mount_point` through the daemon on `port`. The mount
+/// lives as long as the daemon does.
+pub fn mount(port: u16, fs: &str, mount_point: &str) -> Result<()> {
+    rc_at(
+        port,
+        "mount/mount",
+        serde_json::json!({ "fs": fs, "mountPoint": mount_point }),
+    )?;
+    Ok(())
+}
+
+/// Unmount whatever is at `mount_point`.
+pub fn unmount(port: u16, mount_point: &str) -> Result<()> {
+    rc_at(
+        port,
+        "mount/unmount",
+        serde_json::json!({ "mountPoint": mount_point }),
+    )?;
+    Ok(())
+}
+
+/// The mounts the daemon currently serves.
+pub fn list_mounts(port: u16) -> Result<Vec<Mount>> {
+    let reply = rc_at(port, "mount/listmounts", serde_json::json!({}))?;
+    let arr = reply
+        .get("mountPoints")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(arr
+        .iter()
+        .filter_map(|m| {
+            Some(Mount {
+                fs: m.get("Fs")?.as_str()?.to_string(),
+                mount_point: m.get("MountPoint")?.as_str()?.to_string(),
+            })
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,6 +292,53 @@ mod tests {
         assert_eq!(sub.len(), 1);
         assert_eq!(sub[0].name, "2024");
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn mount_lists_and_unmounts() {
+        if crate::rclone_path().is_none() {
+            eprintln!("rclone not installed; skipping");
+            return;
+        }
+        if !std::path::Path::new("/dev/fuse").exists() {
+            eprintln!("no /dev/fuse; skipping");
+            return;
+        }
+        let base = std::env::temp_dir().join(format!("esp-mount-{}", std::process::id()));
+        let data = base.join("data");
+        let point = base.join("point");
+        std::fs::create_dir_all(data.join("sub")).unwrap();
+        std::fs::create_dir_all(&point).unwrap();
+        std::fs::write(data.join("hello.txt"), b"hi").unwrap();
+
+        let rcd = Rcd::start().expect("start rcd");
+        // Mount a local path directly (local backend), so the test needs no remote or config.
+        let fs = data.to_string_lossy().into_owned();
+        let point_s = point.to_string_lossy().into_owned();
+        mount(rcd.port(), &fs, &point_s).expect("mount");
+
+        let mut listed = false;
+        let mut visible = false;
+        for _ in 0..40 {
+            if !listed {
+                listed = list_mounts(rcd.port())
+                    .map(|ms| ms.iter().any(|m| m.mount_point == point_s))
+                    .unwrap_or(false);
+            }
+            if point.join("hello.txt").exists() {
+                visible = true;
+            }
+            if listed && visible {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(listed, "mount did not appear in listmounts");
+        assert!(visible, "mounted content not visible through the mount");
+
+        unmount(rcd.port(), &point_s).expect("unmount");
+        // rcd Drop kills the daemon (and its mounts) if anything above panicked.
         let _ = std::fs::remove_dir_all(&base);
     }
 
