@@ -13,7 +13,7 @@ pub mod connect;
 pub mod engine;
 pub mod jobs;
 
-pub use engine::{rc_at, JobStats, JobStatus, Rcd};
+pub use engine::{list_dirs, rc_at, DirEntry, JobStats, JobStatus, Rcd};
 pub use jobs::{load_jobs, save_jobs, slug_id, Endpoint, Job, SyncMode};
 
 /// A storage backend the user has configured (one entry in rclone's config).

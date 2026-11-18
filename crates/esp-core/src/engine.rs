@@ -177,10 +177,74 @@ pub fn rc_at(port: u16, command: &str, params: serde_json::Value) -> Result<serd
         .with_context(|| format!("parsing `rclone rc {command}` reply"))
 }
 
+/// A subdirectory, for the folder browser.
+#[derive(Clone, Debug)]
+pub struct DirEntry {
+    /// The folder's own name (what to show).
+    pub name: String,
+    /// Its full path relative to the fs root (what to descend into).
+    pub path: String,
+}
+
+/// List the subdirectories of `path` under `fs` (fs is a root: `"remote:"` or `"/"`),
+/// via a daemon on `port`. Free-standing so a worker thread can browse without the handle.
+/// Sorted by name; files are excluded.
+pub fn list_dirs(port: u16, fs: &str, path: &str) -> Result<Vec<DirEntry>> {
+    let reply = rc_at(
+        port,
+        "operations/list",
+        serde_json::json!({ "fs": fs, "remote": path, "opt": { "dirsOnly": true } }),
+    )?;
+    let items = reply
+        .get("list")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut dirs: Vec<DirEntry> = items
+        .iter()
+        .filter_map(|e| {
+            Some(DirEntry {
+                name: e.get("Name")?.as_str()?.to_string(),
+                path: e.get("Path")?.as_str()?.to_string(),
+            })
+        })
+        .collect();
+    dirs.sort_by_key(|d| d.name.to_lowercase());
+    Ok(dirs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::jobs::{Endpoint, Job, SyncMode};
+
+    #[test]
+    fn list_dirs_browses_local_tree() {
+        if crate::rclone_path().is_none() {
+            eprintln!("rclone not installed; skipping");
+            return;
+        }
+        let base = std::env::temp_dir().join(format!("esp-browse-{}", std::process::id()));
+        std::fs::create_dir_all(base.join("Photos/2024")).unwrap();
+        std::fs::create_dir_all(base.join("Documents")).unwrap();
+        std::fs::write(base.join("loose.txt"), b"x").unwrap();
+
+        let rcd = Rcd::start().expect("start rcd");
+        let rel = base.to_string_lossy().trim_start_matches('/').to_string();
+
+        let top = list_dirs(rcd.port(), "/", &rel).expect("list top");
+        let names: Vec<_> = top.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.contains(&"Photos"), "expected Photos, got {names:?}");
+        assert!(names.contains(&"Documents"));
+        assert!(!names.contains(&"loose.txt"), "files must be excluded");
+
+        let photos = top.iter().find(|d| d.name == "Photos").unwrap();
+        let sub = list_dirs(rcd.port(), "/", &photos.path).expect("descend");
+        assert_eq!(sub.len(), 1);
+        assert_eq!(sub[0].name, "2024");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn copy_roundtrip_local_to_local() {

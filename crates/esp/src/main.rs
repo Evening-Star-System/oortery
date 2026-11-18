@@ -6,6 +6,7 @@
 
 mod add_remote;
 mod constellation;
+mod folder_browser;
 mod syncs;
 
 use adw::prelude::*;
@@ -319,6 +320,10 @@ fn build_ui(app: &adw::Application) {
     // Headless aid: auto-open the new-sync dialog for screenshots.
     if std::env::var("ESP_SYNC_DIALOG").is_ok() {
         syncs::present_new(&ui);
+    }
+    // Headless aid: auto-open the folder browser at ESP_BROWSE (a local subpath) for screenshots.
+    if let Ok(start) = std::env::var("ESP_BROWSE") {
+        folder_browser::present(&ui, "/".to_string(), start, std::rc::Rc::new(|_| {}));
     }
 }
 

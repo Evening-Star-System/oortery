@@ -258,19 +258,21 @@ pub fn present_new(ui: &Rc<Ui>) {
         .title("Source")
         .description("Where files are read from.")
         .build();
-    let (src_combo, src_path) = endpoint_rows(&label_refs);
+    let (src_combo, src_path, src_browse) = endpoint_rows(&label_refs);
     gsrc.add(&src_combo);
     gsrc.add(&src_path);
     prefs.add(&gsrc);
+    wire_browse(ui, options.clone(), &src_combo, &src_path, &src_browse);
 
     let gdst = adw::PreferencesGroup::builder()
         .title("Destination")
         .description("Where files are written to.")
         .build();
-    let (dst_combo, dst_path) = endpoint_rows(&label_refs);
+    let (dst_combo, dst_path, dst_browse) = endpoint_rows(&label_refs);
     gdst.add(&dst_combo);
     gdst.add(&dst_path);
     prefs.add(&gdst);
+    wire_browse(ui, options.clone(), &dst_combo, &dst_path, &dst_browse);
 
     let gmode = adw::PreferencesGroup::builder().title("Mode").build();
     let mode_model = gtk::StringList::new(&[
@@ -351,15 +353,55 @@ pub fn present_new(ui: &Rc<Ui>) {
     dialog.present(Some(&ui.window));
 }
 
-/// A remote-or-local combo plus a path entry for one side of a job.
-fn endpoint_rows(labels: &[&str]) -> (adw::ComboRow, adw::EntryRow) {
+/// A remote-or-local combo, a path entry, and a Browse button (returned to be wired).
+fn endpoint_rows(labels: &[&str]) -> (adw::ComboRow, adw::EntryRow, gtk::Button) {
     let model = gtk::StringList::new(labels);
     let combo = adw::ComboRow::builder()
         .title("Location")
         .model(&model)
         .build();
     let path = adw::EntryRow::builder().title("Path").build();
-    (combo, path)
+    let browse = gtk::Button::from_icon_name("folder-open-symbolic");
+    browse.set_tooltip_text(Some("Browse folders"));
+    browse.set_valign(gtk::Align::Center);
+    browse.add_css_class("flat");
+    path.add_suffix(&browse);
+    (combo, path, browse)
+}
+
+/// Open the folder browser for this side's selected location, writing the pick back to `path`.
+fn wire_browse(
+    ui: &Rc<Ui>,
+    options: Vec<Option<String>>,
+    combo: &adw::ComboRow,
+    path: &adw::EntryRow,
+    browse: &gtk::Button,
+) {
+    let ui = ui.clone();
+    let combo = combo.clone();
+    let path = path.clone();
+    browse.connect_clicked(move |_| {
+        let remote = options
+            .get(combo.selected() as usize)
+            .and_then(|o| o.clone());
+        let is_local = remote.is_none();
+        let fs = match &remote {
+            Some(r) => format!("{r}:"),
+            None => "/".to_string(),
+        };
+        // Start where the entry already points (local paths are absolute; the fs root is "/").
+        let cur = path.text().to_string();
+        let start = if is_local {
+            cur.trim_start_matches('/').to_string()
+        } else {
+            cur
+        };
+        let path_w = path.clone();
+        let on_pick: Rc<dyn Fn(String)> = Rc::new(move |sub: String| {
+            path_w.set_text(&if is_local { format!("/{sub}") } else { sub });
+        });
+        crate::folder_browser::present(&ui, fs, start, on_pick);
+    });
 }
 
 /// Build an endpoint from the selected combo option and a path string.
