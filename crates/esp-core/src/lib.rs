@@ -19,7 +19,8 @@ pub use backups::{
     save_password, BackupJob, Snapshot,
 };
 pub use engine::{
-    list_dirs, list_mounts, mount, rc_at, unmount, DirEntry, JobStats, JobStatus, Mount, Rcd,
+    activity, list_dirs, list_mounts, mount, rc_at, unmount, Activity, DirEntry, JobStats,
+    JobStatus, Mount, Rcd, Transfer,
 };
 pub use jobs::{load_jobs, save_jobs, slug_id, Endpoint, Job, SyncMode};
 

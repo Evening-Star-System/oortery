@@ -438,7 +438,7 @@ fn progress_text(s: &JobStats) -> String {
     }
 }
 
-fn human_bytes(n: i64) -> String {
+pub(crate) fn human_bytes(n: i64) -> String {
     const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
     if n < 1024 {
         return format!("{n} B");
@@ -452,7 +452,7 @@ fn human_bytes(n: i64) -> String {
     format!("{v:.1} {}", UNITS[i])
 }
 
-fn human_secs(secs: f64) -> String {
+pub(crate) fn human_secs(secs: f64) -> String {
     let s = secs as i64;
     if s < 60 {
         format!("{s}s")

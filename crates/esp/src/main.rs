@@ -4,6 +4,7 @@
 //! constellation, a Remotes page from the real rclone config, and an add-remote flow
 //! that spans every backend rclone can reach.
 
+mod activity;
 mod add_remote;
 mod backups;
 mod constellation;
@@ -29,6 +30,8 @@ pub struct Ui {
     pub syncs_list: gtk::ListBox,
     pub mounts_list: gtk::ListBox,
     pub backups_list: gtk::ListBox,
+    pub activity_list: gtk::ListBox,
+    pub activity_speed: gtk::Label,
     pub active_label: gtk::Label,
     /// The operations daemon, started lazily the first time a job runs.
     pub rcd: RefCell<Option<Rc<esp_core::Rcd>>>,
@@ -186,19 +189,13 @@ fn build_ui(app: &adw::Application) {
     let (syncs_widget, syncs_list, new_sync_btn) = syncs::page();
     let (mounts_widget, mounts_list) = mounts::page();
     let (backups_widget, backups_list, new_backup_btn) = backups::page();
+    let (activity_widget, activity_speed, activity_list) = activity::page();
     stack.add_named(&overview, Some("overview"));
     stack.add_named(&remotes_widget, Some("remotes"));
     stack.add_named(&syncs_widget, Some("syncs"));
     stack.add_named(&mounts_widget, Some("mounts"));
     stack.add_named(&backups_widget, Some("backups"));
-    stack.add_named(
-        &empty_page(
-            "document-open-recent-symbolic",
-            "Nothing happening",
-            "Transfers and jobs will stream here.",
-        ),
-        Some("activity"),
-    );
+    stack.add_named(&activity_widget, Some("activity"));
 
     // Sidebar nav bound to the view stack.
     let nav_list = gtk::ListBox::new();
@@ -305,6 +302,8 @@ fn build_ui(app: &adw::Application) {
         syncs_list,
         mounts_list,
         backups_list,
+        activity_list,
+        activity_speed,
         active_label,
         rcd: RefCell::new(None),
         active_syncs: Rc::new(Cell::new(0)),
@@ -314,6 +313,7 @@ fn build_ui(app: &adw::Application) {
     syncs::refresh(&ui);
     mounts::refresh(&ui);
     backups::refresh(&ui);
+    activity::start_polling(&ui);
 
     let ui_for_add = ui.clone();
     add_btn.connect_clicked(move |_| add_remote::present(&ui_for_add));
@@ -442,13 +442,4 @@ fn remotes_page() -> (gtk::Widget, gtk::ListBox) {
     scroll.set_child(Some(&col));
     clamp.set_child(Some(&scroll));
     (clamp.upcast(), list)
-}
-
-fn empty_page(icon: &str, title: &str, description: &str) -> gtk::Widget {
-    adw::StatusPage::builder()
-        .icon_name(icon)
-        .title(title)
-        .description(description)
-        .build()
-        .upcast()
 }

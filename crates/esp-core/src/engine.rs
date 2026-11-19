@@ -262,6 +262,44 @@ pub fn list_mounts(port: u16) -> Result<Vec<Mount>> {
         .collect())
 }
 
+/// One file currently being transferred, from `core/stats`'s `transferring` array.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Transfer {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub bytes: i64,
+    #[serde(default)]
+    pub size: i64,
+    /// Percent complete, 0..100.
+    #[serde(default)]
+    pub percentage: f64,
+    /// Bytes per second.
+    #[serde(default)]
+    pub speed: f64,
+    #[serde(default)]
+    pub eta: Option<f64>,
+}
+
+/// A live snapshot of what the engine is moving right now, for the Activity view.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Activity {
+    /// Total throughput, bytes per second.
+    #[serde(default)]
+    pub speed: f64,
+    #[serde(default, rename = "transferring")]
+    pub transfers: Vec<Transfer>,
+}
+
+/// The engine's current activity (what is transferring now), from the daemon on `port`.
+/// Missing or empty stats read as idle.
+pub fn activity(port: u16) -> Activity {
+    rc_at(port, "core/stats", serde_json::json!({}))
+        .ok()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
