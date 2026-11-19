@@ -23,14 +23,18 @@ Early. Working today:
 - The app shell: adaptive sidebar + view stack, a live Overview with a custom-drawn living
   sky (the Evening Star at the center, your clouds orbiting it), and a Remotes page populated
   from your real rclone config.
-- Add a remote across every backend rclone supports (config-value backends end to end;
-  OAuth sign-in is next).
-- Sync jobs: define a source, a destination, and a mode (Copy or Mirror), then run it and
-  watch live progress. Jobs run through a single `rclone rcd` the app owns; that daemon is
-  the shared rail backups, mounts, and the Activity stream will reuse.
+- Connect a cloud across every backend rclone supports: config-value backends fill a short
+  form, OAuth clouds (Drive, Dropbox, OneDrive) sign in with one tap in the browser.
+- Sync jobs: a source, a destination, and a mode (Copy or Mirror), run with live progress.
+- A folder picker to browse any cloud or local tree and choose what to sync.
+- Mounts: open a connected cloud as a folder on this computer.
+- Backups: versioned, encrypted, deduplicated snapshots via restic, to a local folder or any
+  cloud (restic composes over the rclone rail), with restore.
 
-Not built yet: editing/deleting jobs, scheduling, filters, bidirectional sync, backups,
-mounts, the activity stream, and Flatpak packaging.
+Everything runs through a single `rclone rcd` the app owns, the shared engine rail.
+
+Not built yet: editing/deleting jobs, scheduling, filters, bidirectional sync, the activity
+stream, moving the backup password to the OS keyring, and Flatpak packaging.
 
 ## Build
 
@@ -38,7 +42,8 @@ mounts, the activity stream, and Flatpak packaging.
 cargo run -p esp
 ```
 
-Requires GTK4 and libadwaita development libraries and rclone on the system.
+Requires GTK4 and libadwaita development libraries, plus `rclone` (all backends) and `restic`
+(backups) on the system.
 
 ## Layout
 

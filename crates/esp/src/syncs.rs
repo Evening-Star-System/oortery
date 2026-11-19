@@ -87,7 +87,7 @@ pub fn refresh(ui: &Rc<Ui>) {
 }
 
 /// Depth-first search for the Run button within a job row (used by the headless aid).
-fn find_run_button(root: &gtk::Widget) -> Option<gtk::Button> {
+pub(crate) fn find_run_button(root: &gtk::Widget) -> Option<gtk::Button> {
     let mut stack = vec![root.clone()];
     while let Some(w) = stack.pop() {
         if let Ok(btn) = w.clone().downcast::<gtk::Button>() {
@@ -354,7 +354,7 @@ pub fn present_new(ui: &Rc<Ui>) {
 }
 
 /// A remote-or-local combo, a path entry, and a Browse button (returned to be wired).
-fn endpoint_rows(labels: &[&str]) -> (adw::ComboRow, adw::EntryRow, gtk::Button) {
+pub(crate) fn endpoint_rows(labels: &[&str]) -> (adw::ComboRow, adw::EntryRow, gtk::Button) {
     let model = gtk::StringList::new(labels);
     let combo = adw::ComboRow::builder()
         .title("Location")
@@ -370,7 +370,7 @@ fn endpoint_rows(labels: &[&str]) -> (adw::ComboRow, adw::EntryRow, gtk::Button)
 }
 
 /// Open the folder browser for this side's selected location, writing the pick back to `path`.
-fn wire_browse(
+pub(crate) fn wire_browse(
     ui: &Rc<Ui>,
     options: Vec<Option<String>>,
     combo: &adw::ComboRow,
@@ -405,7 +405,7 @@ fn wire_browse(
 }
 
 /// Build an endpoint from the selected combo option and a path string.
-fn endpoint_from(options: &[Option<String>], selected: u32, path: &str) -> Endpoint {
+pub(crate) fn endpoint_from(options: &[Option<String>], selected: u32, path: &str) -> Endpoint {
     let path = path.trim().to_string();
     match options.get(selected as usize).and_then(|o| o.clone()) {
         Some(remote) => Endpoint::remote(remote, path),

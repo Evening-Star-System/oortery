@@ -5,6 +5,7 @@
 //! that spans every backend rclone can reach.
 
 mod add_remote;
+mod backups;
 mod constellation;
 mod folder_browser;
 mod mounts;
@@ -27,6 +28,7 @@ pub struct Ui {
     pub node_count: Rc<Cell<usize>>,
     pub syncs_list: gtk::ListBox,
     pub mounts_list: gtk::ListBox,
+    pub backups_list: gtk::ListBox,
     pub active_label: gtk::Label,
     /// The operations daemon, started lazily the first time a job runs.
     pub rcd: RefCell<Option<Rc<esp_core::Rcd>>>,
@@ -183,18 +185,12 @@ fn build_ui(app: &adw::Application) {
     let (remotes_widget, remotes_list) = remotes_page();
     let (syncs_widget, syncs_list, new_sync_btn) = syncs::page();
     let (mounts_widget, mounts_list) = mounts::page();
+    let (backups_widget, backups_list, new_backup_btn) = backups::page();
     stack.add_named(&overview, Some("overview"));
     stack.add_named(&remotes_widget, Some("remotes"));
     stack.add_named(&syncs_widget, Some("syncs"));
     stack.add_named(&mounts_widget, Some("mounts"));
-    stack.add_named(
-        &empty_page(
-            "drive-harddisk-symbolic",
-            "No backups yet",
-            "Schedule a versioned backup you can restore from.",
-        ),
-        Some("backups"),
-    );
+    stack.add_named(&backups_widget, Some("backups"));
     stack.add_named(
         &empty_page(
             "document-open-recent-symbolic",
@@ -308,6 +304,7 @@ fn build_ui(app: &adw::Application) {
         node_count,
         syncs_list,
         mounts_list,
+        backups_list,
         active_label,
         rcd: RefCell::new(None),
         active_syncs: Rc::new(Cell::new(0)),
@@ -316,11 +313,14 @@ fn build_ui(app: &adw::Application) {
     refresh(&ui);
     syncs::refresh(&ui);
     mounts::refresh(&ui);
+    backups::refresh(&ui);
 
     let ui_for_add = ui.clone();
     add_btn.connect_clicked(move |_| add_remote::present(&ui_for_add));
     let ui_for_new_sync = ui.clone();
     new_sync_btn.connect_clicked(move |_| syncs::present_new(&ui_for_new_sync));
+    let ui_for_new_backup = ui.clone();
+    new_backup_btn.connect_clicked(move |_| backups::present_new(&ui_for_new_backup));
 
     window.present();
 
@@ -335,6 +335,10 @@ fn build_ui(app: &adw::Application) {
     // Headless aid: auto-open the folder browser at ESP_BROWSE (a local subpath) for screenshots.
     if let Ok(start) = std::env::var("ESP_BROWSE") {
         folder_browser::present(&ui, "/".to_string(), start, std::rc::Rc::new(|_| {}));
+    }
+    // Headless aid: auto-open the new-backup dialog for screenshots.
+    if std::env::var("ESP_BACKUP_DIALOG").is_ok() {
+        backups::present_new(&ui);
     }
 }
 

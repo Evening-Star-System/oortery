@@ -9,10 +9,15 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::process::Command;
 
+pub mod backups;
 pub mod connect;
 pub mod engine;
 pub mod jobs;
 
+pub use backups::{
+    init_repo, list_snapshots, load_backups, restic_path, restore, run_backup, save_backups,
+    save_password, BackupJob, Snapshot,
+};
 pub use engine::{
     list_dirs, list_mounts, mount, rc_at, unmount, DirEntry, JobStats, JobStatus, Mount, Rcd,
 };
@@ -75,7 +80,7 @@ pub fn rclone_path() -> Option<String> {
     which("rclone")
 }
 
-fn which(bin: &str) -> Option<String> {
+pub(crate) fn which(bin: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|p| p.join(bin))

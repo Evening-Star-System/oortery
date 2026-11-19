@@ -74,6 +74,15 @@ impl Endpoint {
         }
     }
 
+    /// The restic repository string for this location: a bare local path, or
+    /// `rclone:remote:path` so restic backs up over our rclone rail.
+    pub fn restic_repo(&self) -> String {
+        match &self.remote {
+            Some(r) => format!("rclone:{r}:{}", self.path),
+            None => self.path.clone(),
+        }
+    }
+
     /// A short, human label for the endpoint.
     pub fn display(&self) -> String {
         match &self.remote {
@@ -94,14 +103,19 @@ pub struct Job {
     pub mode: SyncMode,
 }
 
-/// Path to the jobs store: `$XDG_CONFIG_HOME/esp/jobs.json` (or `~/.config/esp/jobs.json`).
-pub fn jobs_path() -> Result<PathBuf> {
+/// ESP's config directory: `$XDG_CONFIG_HOME/esp` (or `~/.config/esp`).
+pub fn config_dir() -> Result<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
         .context("no XDG_CONFIG_HOME or HOME to locate the config dir")?;
-    Ok(base.join("esp").join("jobs.json"))
+    Ok(base.join("esp"))
+}
+
+/// Path to the jobs store: `<config dir>/jobs.json`.
+pub fn jobs_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("jobs.json"))
 }
 
 /// Load saved jobs. An absent store is an empty list, not an error.
