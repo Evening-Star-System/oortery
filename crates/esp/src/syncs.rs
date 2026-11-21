@@ -74,24 +74,32 @@ pub fn refresh(ui: &Rc<Ui>) {
         ui.syncs_list.append(&job_row(ui, job));
     }
 
-    // Headless aid: drive the first job's Run through the real path once mapped.
+    // Headless aids: drive the first job's Run or name-check through the real path once mapped.
     if std::env::var("ESP_AUTORUN").is_ok() {
-        if let Some(first) = ui.syncs_list.first_child() {
-            if let Some(btn) = find_run_button(&first) {
-                glib::timeout_add_local_once(Duration::from_millis(800), move || {
-                    btn.activate();
-                });
-            }
+        activate_first("media-playback-start-symbolic", ui);
+    }
+    if std::env::var("ESP_PREFLIGHT_AUTORUN").is_ok() {
+        activate_first("edit-find-symbolic", ui);
+    }
+}
+
+/// Headless aid: activate the first row's button with `icon` shortly after the page maps.
+fn activate_first(icon: &'static str, ui: &Rc<Ui>) {
+    if let Some(first) = ui.syncs_list.first_child() {
+        if let Some(btn) = find_button(&first, icon) {
+            glib::timeout_add_local_once(Duration::from_millis(800), move || {
+                btn.activate();
+            });
         }
     }
 }
 
-/// Depth-first search for the Run button within a job row (used by the headless aid).
-pub(crate) fn find_run_button(root: &gtk::Widget) -> Option<gtk::Button> {
+/// Depth-first search for a button with the given icon within a row (used by headless aids).
+pub(crate) fn find_button(root: &gtk::Widget, icon: &str) -> Option<gtk::Button> {
     let mut stack = vec![root.clone()];
     while let Some(w) = stack.pop() {
         if let Ok(btn) = w.clone().downcast::<gtk::Button>() {
-            if btn.icon_name().as_deref() == Some("media-playback-start-symbolic") {
+            if btn.icon_name().as_deref() == Some(icon) {
                 return Some(btn);
             }
         }
@@ -102,6 +110,11 @@ pub(crate) fn find_run_button(root: &gtk::Widget) -> Option<gtk::Button> {
         }
     }
     None
+}
+
+/// Depth-first search for the Run button within a job row (used by the headless aid).
+pub(crate) fn find_run_button(root: &gtk::Widget) -> Option<gtk::Button> {
+    find_button(root, "media-playback-start-symbolic")
 }
 
 /// One job row: name, source to destination, a mode badge, a hidden progress bar, and Run.
@@ -129,6 +142,15 @@ fn job_row(ui: &Rc<Ui>, job: Job) -> adw::ActionRow {
     bar.set_width_request(150);
     bar.set_visible(false);
     row.add_suffix(&bar);
+
+    // Pre-flight: catch names a strict cloud will silently drop, before they vanish.
+    let check = gtk::Button::from_icon_name("edit-find-symbolic");
+    check.set_tooltip_text(Some("Check names for cloud problems"));
+    check.set_valign(gtk::Align::Center);
+    check.add_css_class("flat");
+    row.add_suffix(&check);
+    let (ui_c, job_c) = (ui.clone(), job.clone());
+    check.connect_clicked(move |_| present_preflight(&ui_c, &job_c));
 
     let run = gtk::Button::from_icon_name("media-playback-start-symbolic");
     run.set_tooltip_text(Some("Run this sync now"));
@@ -246,6 +268,96 @@ fn run_job(
             }
         }
     });
+}
+
+/// Scan the sync's local source for names a strict cloud backend (OneDrive, SharePoint, any
+/// case-insensitive target) would silently refuse, and show what it finds. Runs the walk on a
+/// worker thread so a big tree never freezes the UI.
+fn present_preflight(ui: &Rc<Ui>, job: &Job) {
+    if job.src.remote.is_some() {
+        ui.toast("Name checks run on a source folder on this computer.");
+        return;
+    }
+    let source = job.src.path.clone();
+
+    let dialog = adw::Dialog::builder()
+        .title("Check names")
+        .content_width(540)
+        .content_height(560)
+        .build();
+    let list = gtk::ListBox::new();
+    list.add_css_class("boxed-list");
+    list.set_selection_mode(gtk::SelectionMode::None);
+    let spinner = gtk::Spinner::new();
+    spinner.set_halign(gtk::Align::Center);
+    spinner.set_margin_top(16);
+    spinner.start();
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_vexpand(true);
+    scroll.set_child(Some(&list));
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    body.set_margin_top(10);
+    body.set_margin_bottom(12);
+    body.set_margin_start(12);
+    body.set_margin_end(12);
+    body.append(&spinner);
+    body.append(&scroll);
+    let tv = adw::ToolbarView::new();
+    tv.add_top_bar(&adw::HeaderBar::new());
+    tv.set_content(Some(&body));
+    dialog.set_child(Some(&tv));
+
+    let (tx, rx) = async_channel::bounded(1);
+    std::thread::spawn(move || {
+        // Cap the report so a pathological tree cannot run away; 200 examples is plenty to act on.
+        let out = esp_core::scan_dir(std::path::Path::new(&source), 200).map_err(|e| e.to_string());
+        let _ = tx.send_blocking(out);
+    });
+
+    let (list_c, spinner_c) = (list.clone(), spinner.clone());
+    glib::spawn_future_local(async move {
+        let res = rx.recv().await;
+        spinner_c.stop();
+        spinner_c.set_visible(false);
+        match res {
+            Ok(Ok((hazards, _))) if hazards.is_empty() => {
+                let row = adw::ActionRow::builder()
+                    .title("No problems found")
+                    .subtitle("Every name here should sync to any cloud.")
+                    .build();
+                row.add_prefix(&gtk::Image::from_icon_name("emblem-ok-symbolic"));
+                list_c.append(&row);
+            }
+            Ok(Ok((hazards, capped))) => {
+                for h in &hazards {
+                    let row = adw::ActionRow::builder()
+                        .title(&h.path)
+                        .subtitle(h.issue.summary())
+                        .build();
+                    row.add_prefix(&gtk::Image::from_icon_name("dialog-warning-symbolic"));
+                    list_c.append(&row);
+                }
+                if capped {
+                    let row = adw::ActionRow::builder()
+                        .title("More not shown")
+                        .subtitle("Stopped after the first 200 so the check stays fast.")
+                        .build();
+                    list_c.append(&row);
+                }
+            }
+            Ok(Err(e)) => {
+                let row = adw::ActionRow::builder()
+                    .title("Could not check the folder")
+                    .subtitle(&e)
+                    .build();
+                row.add_prefix(&gtk::Image::from_icon_name("dialog-error-symbolic"));
+                list_c.append(&row);
+            }
+            Err(_) => {}
+        }
+    });
+
+    dialog.present(Some(&ui.window));
 }
 
 /// The new-/edit-sync dialog: name, a source and destination built from configured remotes or
