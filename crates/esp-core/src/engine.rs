@@ -74,13 +74,24 @@ impl Rcd {
 
     /// Start `job` asynchronously, tagged with `group` so its stats can be queried apart
     /// from any other running job. Returns the rcd job id to poll.
+    ///
+    /// The destination backend decides throttle/retry limits: a touchy backend (Proton,
+    /// Drive) is dialed down so a many-small-files run cannot hammer it into the documented
+    /// hang. See `tuning`.
     pub fn start_job(&self, job: &Job, group: &str) -> Result<i64> {
-        let params = serde_json::json!({
+        let backend = crate::tuning::backend_of(self.port, job.dst.remote.as_deref());
+        let config = crate::tuning::tuning_for(&backend).as_rc_config();
+        let mut params = serde_json::json!({
             "srcFs": job.src.fs(),
             "dstFs": job.dst.fs(),
             "_async": true,
             "_group": group,
         });
+        if let (Some(obj), serde_json::Value::Object(cfg)) = (params.as_object_mut(), &config) {
+            if !cfg.is_empty() {
+                obj.insert("_config".into(), config.clone());
+            }
+        }
         let reply = self.rc(job.mode.rc_command(), params)?;
         reply
             .get("jobid")

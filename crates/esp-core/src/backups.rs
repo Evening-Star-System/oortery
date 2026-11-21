@@ -95,6 +95,17 @@ fn restic_cmd(job: &BackupJob) -> Result<Command> {
         .arg(job.repo.restic_repo())
         .arg("--password-file")
         .arg(password_file(&job.id)?);
+    // When the repo is a cloud remote, restic shells out to rclone, which honors RCLONE_*
+    // env. Apply the destination backend's throttle/retry envelope so a cloud backup is as
+    // gentle as a sync to the same backend (the Proton many-small-files hang bites restic too;
+    // wrapping in restic reduces file count but the pack uploads still face the rate limit).
+    for (k, v) in crate::tuning::tuning_for(&crate::tuning::backend_from_config(
+        job.repo.remote.as_deref(),
+    ))
+    .as_rclone_env()
+    {
+        c.env(k, v);
+    }
     Ok(c)
 }
 

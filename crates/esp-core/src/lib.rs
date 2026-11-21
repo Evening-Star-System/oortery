@@ -13,6 +13,7 @@ pub mod backups;
 pub mod connect;
 pub mod engine;
 pub mod jobs;
+pub mod tuning;
 
 pub use backups::{
     init_repo, list_snapshots, load_backups, password_file, restic_path, restore, run_backup,
@@ -23,6 +24,7 @@ pub use engine::{
     JobStatus, Mount, Rcd, Transfer,
 };
 pub use jobs::{load_jobs, save_jobs, slug_id, Endpoint, Job, SyncMode};
+pub use tuning::{backend_of, tuning_for, Tuning};
 
 /// A storage backend the user has configured (one entry in rclone's config).
 #[derive(Clone, Debug)]
