@@ -223,6 +223,7 @@ fn run_backup(
     let (ui_p, row_p, bar_p, run_p) = (ui.clone(), row.clone(), bar.clone(), run.clone());
     let base = base_subtitle.to_string();
     let name = job.name.clone();
+    let job_id = job.id.clone();
     glib::spawn_future_local(async move {
         while let Ok(msg) = rx.recv().await {
             match msg {
@@ -238,7 +239,11 @@ fn run_backup(
                     bar_p.set_visible(false);
                     row_p.set_subtitle(&base);
                     match res {
-                        Ok(_) => ui_p.toast(&format!("{name} backed up")),
+                        Ok(_) => {
+                            // Record real success (passed integrity) so the Overview reflects it.
+                            let _ = esp_core::runlog::record_success("backup", &job_id);
+                            ui_p.toast(&format!("{name} backed up"));
+                        }
                         Err(e) => ui_p.toast(&format!("{name} backup failed: {e}")),
                     }
                     break;
@@ -282,12 +287,15 @@ pub(crate) fn run_detached(ui: &Rc<Ui>, job: &BackupJob) {
             .map_err(|e| e.to_string());
         let _ = tx.send_blocking(Msg::Done(res));
     });
-    let (ui_p, name) = (ui.clone(), job.name.clone());
+    let (ui_p, name, job_id) = (ui.clone(), job.name.clone(), job.id.clone());
     glib::spawn_future_local(async move {
         while let Ok(msg) = rx.recv().await {
             if let Msg::Done(res) = msg {
                 match res {
-                    Ok(_) => ui_p.toast(&format!("Scheduled '{name}' backed up")),
+                    Ok(_) => {
+                        let _ = esp_core::runlog::record_success("backup", &job_id);
+                        ui_p.toast(&format!("Scheduled '{name}' backed up"));
+                    }
                     Err(e) => ui_p.toast(&format!("Scheduled '{name}' backup failed: {e}")),
                 }
                 break;

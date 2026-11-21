@@ -48,16 +48,15 @@ pub fn summary() -> Summary {
     let syncs = load_jobs().map(|j| j.len()).unwrap_or(0);
     let backups = load_backups().unwrap_or_default();
 
-    let backups_run = backups.iter().filter(|b| b.last_run.is_some()).count();
+    // Honest read: a backup counts as "run"/"protected" only when it has actually SUCCEEDED, not
+    // when a run was merely dispatched. Success times come from the runlog, keyed by job id.
+    let success = |b: &crate::backups::BackupJob| crate::runlog::last_success("backup", &b.id);
+    let backups_run = backups.iter().filter(|b| success(b).is_some()).count();
     let overdue = backups
         .iter()
-        .filter(|b| is_overdue(b.schedule.interval_secs(), b.last_run, now))
+        .filter(|b| is_overdue(b.schedule.interval_secs(), success(b), now))
         .count();
-    let newest_backup_age = backups
-        .iter()
-        .filter_map(|b| b.last_run)
-        .map(|lr| now - lr)
-        .min();
+    let newest_backup_age = backups.iter().filter_map(success).map(|lr| now - lr).min();
 
     let (health, headline) = verdict(remotes, syncs, backups.len(), backups_run, overdue);
 
@@ -158,6 +157,44 @@ mod tests {
         assert_eq!(verdict(1, 0, 0, 0, 0).0, Health::Attention); // remote but no backups
         assert_eq!(verdict(1, 0, 2, 0, 0).0, Health::Attention); // backups never run
         assert_eq!(verdict(1, 0, 2, 2, 0).0, Health::Healthy); // all run, none overdue
+    }
+
+    #[test]
+    fn summary_counts_a_backup_only_after_real_success() {
+        use crate::backups::{save_backups, BackupJob};
+        use crate::jobs::{Endpoint, Schedule};
+        let _env = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("oortery-dash-{}", std::process::id()));
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // A manual backup exists but has never succeeded: it is NOT counted as protected.
+        save_backups(&[BackupJob {
+            id: "photos".into(),
+            name: "Photos".into(),
+            sources: vec!["/data".into()],
+            repo: Endpoint::local("/tmp/repo"),
+            excludes: vec![],
+            schedule: Schedule::Manual,
+            last_run: None,
+        }])
+        .unwrap();
+        let s = summary();
+        assert_eq!(s.backups, 1);
+        assert_eq!(s.backups_run, 0);
+        assert_eq!(s.health, Health::Attention);
+
+        // Only a recorded SUCCESS flips it to protected (a dispatch alone would not touch this).
+        crate::runlog::record_success("backup", "photos").unwrap();
+        let s = summary();
+        assert_eq!(s.backups_run, 1);
+        assert_eq!(s.health, Health::Healthy);
+        assert!(s.newest_backup_age.is_some());
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

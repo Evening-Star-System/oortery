@@ -19,6 +19,7 @@ pub mod lock;
 pub mod p2p;
 pub mod portable;
 pub mod preflight;
+pub mod runlog;
 pub mod settings;
 pub mod stall;
 pub mod tuning;

@@ -243,6 +243,7 @@ fn run_job(
     let run_p = run.clone();
     let base = base_subtitle.to_string();
     let name = job.name.clone();
+    let job_id = job.id.clone();
     glib::timeout_add_local(Duration::from_millis(250), move || {
         let Some(rcd) = ui_p.rcd.borrow().as_ref().cloned() else {
             return glib::ControlFlow::Break;
@@ -264,6 +265,7 @@ fn run_job(
         match rcd.job_status(jobid) {
             Ok(st) if st.finished => {
                 if st.success {
+                    let _ = esp_core::runlog::record_success("sync", &job_id);
                     done(format!("{name} finished"));
                 } else {
                     done(format!("{name} failed: {}", st.error));
@@ -394,7 +396,7 @@ pub(crate) fn run_detached(ui: &Rc<Ui>, job: &Job) {
     ui.refresh_active_count();
     ui.toast(&format!("Scheduled sync '{}' started", job.name));
 
-    let (ui_p, name) = (ui.clone(), job.name.clone());
+    let (ui_p, name, job_id) = (ui.clone(), job.name.clone(), job.id.clone());
     glib::timeout_add_local(Duration::from_millis(400), move || {
         let Some(rcd) = ui_p.rcd.borrow().as_ref().cloned() else {
             return glib::ControlFlow::Break;
@@ -405,6 +407,7 @@ pub(crate) fn run_detached(ui: &Rc<Ui>, job: &Job) {
                 ui_p.active_syncs.set(left);
                 ui_p.refresh_active_count();
                 if st.success {
+                    let _ = esp_core::runlog::record_success("sync", &job_id);
                     ui_p.toast(&format!("Scheduled '{name}' finished"));
                 } else {
                     ui_p.toast(&format!("Scheduled '{name}' failed: {}", st.error));
