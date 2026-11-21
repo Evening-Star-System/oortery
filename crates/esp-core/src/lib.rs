@@ -16,6 +16,7 @@ pub mod dashboard;
 pub mod engine;
 pub mod jobs;
 pub mod lock;
+pub mod p2p;
 pub mod portable;
 pub mod preflight;
 pub mod settings;
@@ -34,6 +35,7 @@ pub use engine::{
 };
 pub use jobs::{load_jobs, now_unix, save_jobs, slug_id, Endpoint, Job, Schedule, SyncMode};
 pub use lock::{clear_lock, lock_enabled, set_lock, verify as verify_lock};
+pub use p2p::{syncthing_path, Syncthingd};
 pub use portable::{export_bundle, import_bundle, ImportResult};
 pub use preflight::{scan_dir, Hazard, Issue};
 pub use settings::{load_window_state, save_window_state, WindowState};
