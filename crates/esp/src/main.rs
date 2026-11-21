@@ -11,6 +11,7 @@ mod backups;
 mod constellation;
 mod folder_browser;
 mod mounts;
+mod spinner;
 mod syncs;
 
 use adw::prelude::*;

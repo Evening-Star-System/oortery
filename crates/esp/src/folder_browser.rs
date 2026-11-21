@@ -42,9 +42,14 @@ pub fn present(ui: &Rc<Ui>, fs: String, start: String, on_pick: Loader) {
     crumb.set_ellipsize(gtk::pango::EllipsizeMode::Start);
     crumb.set_margin_start(4);
 
-    let spinner = gtk::Spinner::new();
-    spinner.set_halign(gtk::Align::Center);
+    let spinner = crate::spinner::celestial();
     spinner.set_margin_top(16);
+    let status = gtk::Label::new(None);
+    status.add_css_class("dim");
+    status.add_css_class("caption");
+    status.set_margin_top(4);
+    status.set_wrap(true);
+    status.set_justify(gtk::Justification::Center);
 
     let list = gtk::ListBox::new();
     list.add_css_class("boxed-list");
@@ -60,6 +65,7 @@ pub fn present(ui: &Rc<Ui>, fs: String, start: String, on_pick: Loader) {
     body.set_margin_end(12);
     body.append(&crumb);
     body.append(&spinner);
+    body.append(&status);
     body.append(&scroll);
 
     let tv = adw::ToolbarView::new();
@@ -70,12 +76,12 @@ pub fn present(ui: &Rc<Ui>, fs: String, start: String, on_pick: Loader) {
     // Recursive loader held in a cell so row callbacks can re-enter it for navigation.
     let load: Rc<RefCell<Option<Loader>>> = Rc::new(RefCell::new(None));
     let load_impl: Loader = {
-        let (fs, cur, ui, list, spinner, crumb, load) = (
+        let (fs, cur, list, spinner, status, crumb, load) = (
             fs.clone(),
             cur.clone(),
-            ui.clone(),
             list.clone(),
             spinner.clone(),
+            status.clone(),
             crumb.clone(),
             load.clone(),
         );
@@ -86,7 +92,22 @@ pub fn present(ui: &Rc<Ui>, fs: String, start: String, on_pick: Loader) {
                 list.remove(&c);
             }
             spinner.set_visible(true);
-            spinner.start();
+            status.set_text("Loading folders\u{2026}");
+            status.set_visible(true);
+
+            // A slow cloud (a large Google Drive listing for the first time) can take a while;
+            // reassure instead of looking frozen, and never leave a bare spinner forever.
+            let done = Rc::new(std::cell::Cell::new(false));
+            {
+                let (status_s, done_s) = (status.clone(), done.clone());
+                glib::timeout_add_local_once(std::time::Duration::from_secs(18), move || {
+                    if !done_s.get() {
+                        status_s.set_text(
+                            "Still loading. A large cloud can be slow the first time it is listed.",
+                        );
+                    }
+                });
+            }
 
             let (tx, rx) = async_channel::bounded(1);
             let (fs_t, sub_t) = (fs.clone(), sub.clone());
@@ -94,17 +115,19 @@ pub fn present(ui: &Rc<Ui>, fs: String, start: String, on_pick: Loader) {
                 let _ = tx.send_blocking(esp_core::list_dirs(port, &fs_t, &sub_t));
             });
 
-            let (list_c, spinner_c, ui_c, load_c, sub_c) = (
+            let (list_c, spinner_c, status_c, load_c, sub_c, done_c) = (
                 list.clone(),
                 spinner.clone(),
-                ui.clone(),
+                status.clone(),
                 load.clone(),
                 sub.clone(),
+                done.clone(),
             );
             glib::spawn_future_local(async move {
                 let res = rx.recv().await;
-                spinner_c.stop();
+                done_c.set(true);
                 spinner_c.set_visible(false);
+                status_c.set_visible(false);
                 match res {
                     Ok(Ok(dirs)) => {
                         if !sub_c.is_empty() {
@@ -146,7 +169,24 @@ pub fn present(ui: &Rc<Ui>, fs: String, start: String, on_pick: Loader) {
                             list_c.append(&row);
                         }
                     }
-                    Ok(Err(e)) => ui_c.toast(&format!("Could not list folders: {e}")),
+                    // Show the failure inline with a Retry, so the user is not stuck.
+                    Ok(Err(e)) => {
+                        let row = adw::ActionRow::builder()
+                            .title("Could not load folders")
+                            .subtitle(e.to_string())
+                            .build();
+                        row.add_prefix(&gtk::Image::from_icon_name("dialog-warning-symbolic"));
+                        let retry = gtk::Button::with_label("Retry");
+                        retry.set_valign(gtk::Align::Center);
+                        let (load_r, sub_r) = (load_c.clone(), sub_c.clone());
+                        retry.connect_clicked(move |_| {
+                            if let Some(f) = load_r.borrow().clone() {
+                                f(sub_r.clone());
+                            }
+                        });
+                        row.add_suffix(&retry);
+                        list_c.append(&row);
+                    }
                     Err(_) => {}
                 }
             });

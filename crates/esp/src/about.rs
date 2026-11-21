@@ -13,7 +13,6 @@ pub fn present(window: &adw::ApplicationWindow) {
         .developer_name("Evening Star Productions")
         .version(env!("CARGO_PKG_VERSION"))
         .license_type(gtk::License::Agpl30)
-        .website("https://eveningstar.app")
         .copyright("\u{00a9} Evening Star Productions")
         .comments(
             "Mission control for all your data: sync, back up, and mount every cloud. \

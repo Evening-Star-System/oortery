@@ -288,10 +288,8 @@ fn present_preflight(ui: &Rc<Ui>, job: &Job) {
     let list = gtk::ListBox::new();
     list.add_css_class("boxed-list");
     list.set_selection_mode(gtk::SelectionMode::None);
-    let spinner = gtk::Spinner::new();
-    spinner.set_halign(gtk::Align::Center);
+    let spinner = crate::spinner::celestial();
     spinner.set_margin_top(16);
-    spinner.start();
     let scroll = gtk::ScrolledWindow::new();
     scroll.set_vexpand(true);
     scroll.set_child(Some(&list));
@@ -317,7 +315,6 @@ fn present_preflight(ui: &Rc<Ui>, job: &Job) {
     let (list_c, spinner_c) = (list.clone(), spinner.clone());
     glib::spawn_future_local(async move {
         let res = rx.recv().await;
-        spinner_c.stop();
         spinner_c.set_visible(false);
         match res {
             Ok(Ok((hazards, _))) if hazards.is_empty() => {
