@@ -154,7 +154,7 @@ fn oauth_page(
     let row = adw::ActionRow::builder()
         .title("Sign in securely")
         .subtitle(format!(
-            "You'll sign in on {pretty}'s own page in your browser. ESP never sees your password."
+            "You'll sign in on {pretty}'s own page in your browser. Oortery never sees your password."
         ))
         .build();
     row.add_prefix(&gtk::Image::from_icon_name("dialog-password-symbolic"));

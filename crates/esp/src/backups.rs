@@ -70,7 +70,7 @@ pub fn refresh(ui: &Rc<Ui>) {
     if esp_core::restic_path().is_none() {
         let row = adw::ActionRow::builder()
             .title("restic is not installed")
-            .subtitle("Backups need the restic tool on your system. Install it, then restart ESP.")
+            .subtitle("Backups need the restic tool on your system. Install it, then restart Oortery.")
             .build();
         row.add_prefix(&gtk::Image::from_icon_name("dialog-warning-symbolic"));
         ui.backups_list.append(&row);

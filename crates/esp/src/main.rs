@@ -1,4 +1,4 @@
-//! ESP: a mission control for all your data.
+//! Oortery: a mission control for all your data.
 //!
 //! A native GTK4 + libadwaita shell over esp-core. Overview with a live data
 //! constellation, a Remotes page from the real rclone config, and an add-remote flow
@@ -17,7 +17,7 @@ use gtk::{gdk, glib};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-const APP_ID: &str = "app.eveningstar.Esp";
+const APP_ID: &str = "app.eveningstar.Oortery";
 
 /// Shared, refreshable UI handles passed to dialogs and refresh logic.
 pub struct Ui {
@@ -97,13 +97,13 @@ pub fn refresh(ui: &Rc<Ui>) {
 }
 
 fn main() -> glib::ExitCode {
-    // ESP always wears its night sky. Clear any inherited GTK_THEME (an AppImage launcher,
+    // Oortery always wears its night sky. Clear any inherited GTK_THEME (an AppImage launcher,
     // or a user's shell) before GTK starts, so nothing overrides our forced dark scheme.
     std::env::remove_var("GTK_THEME");
 
     let app = adw::Application::builder().application_id(APP_ID).build();
     app.connect_startup(|_| {
-        // ESP lives in a night sky: force the dark scheme so the look is consistent.
+        // Oortery lives in a night sky: force the dark scheme so the look is consistent.
         adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
         load_css();
     });
@@ -231,7 +231,7 @@ fn build_ui(app: &adw::Application) {
     nav_list.select_row(nav_list.row_at_index(start_idx).as_ref());
 
     let brand = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let b1 = gtk::Label::new(Some("ESP"));
+    let b1 = gtk::Label::new(Some("Oortery"));
     b1.add_css_class("title-4");
     b1.set_xalign(0.0);
     let b2 = gtk::Label::new(Some("mission control for your data"));

@@ -103,14 +103,14 @@ pub struct Job {
     pub mode: SyncMode,
 }
 
-/// ESP's config directory: `$XDG_CONFIG_HOME/esp` (or `~/.config/esp`).
+/// Oortery's config directory: `$XDG_CONFIG_HOME/oortery` (or `~/.config/oortery`).
 pub fn config_dir() -> Result<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
         .context("no XDG_CONFIG_HOME or HOME to locate the config dir")?;
-    Ok(base.join("esp"))
+    Ok(base.join("oortery"))
 }
 
 /// Path to the jobs store: `<config dir>/jobs.json`.

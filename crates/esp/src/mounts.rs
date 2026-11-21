@@ -1,6 +1,6 @@
 //! The Mounts page: make a connected cloud appear as a folder on this computer. Each remote
 //! gets a Mount / Unmount toggle driven by the shared rcd daemon (the same one that runs
-//! syncs). Mounts live for the app session; the default mountpoint is `$HOME/ESP/<remote>`.
+//! syncs). Mounts live for the app session; the default mountpoint is `$HOME/Oortery/<remote>`.
 
 use crate::Ui;
 use adw::prelude::*;
@@ -41,10 +41,10 @@ pub fn page() -> (gtk::Widget, gtk::ListBox) {
     (clamp.upcast(), list)
 }
 
-/// The default mountpoint for a remote: `$HOME/ESP/<remote>`.
+/// The default mountpoint for a remote: `$HOME/Oortery/<remote>`.
 fn point_for(name: &str) -> String {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
-        .join("ESP")
+        .join("Oortery")
         .join(name)
         .to_string_lossy()
         .into_owned()
