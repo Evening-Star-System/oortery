@@ -92,7 +92,7 @@ pub fn refresh(ui: &Rc<Ui>) {
     }
 
     // Headless aid: drive the first backup's Run through the real path once mapped.
-    if std::env::var("ESP_BACKUP_AUTORUN").is_ok() {
+    if crate::aid("ESP_BACKUP_AUTORUN").is_some() {
         if let Some(first) = ui.backups_list.first_child() {
             if let Some(btn) = syncs::find_run_button(&first) {
                 gtk::glib::timeout_add_local_once(
@@ -364,19 +364,45 @@ fn present_snapshots(ui: &Rc<Ui>, job: &BackupJob) {
     dialog.present(Some(&ui.window));
 }
 
-/// Pick a target folder, then restore the snapshot into it on a worker thread.
+/// Confirm, then restore the snapshot into a fresh `~/Oortery/Restore-<id>` folder on a worker
+/// thread. Restoring into a dedicated new folder (never the filesystem root, never in place) means
+/// a restore can only ADD files; it cannot overwrite the user's live data by a mis-click.
 fn restore_snapshot(ui: &Rc<Ui>, job: &BackupJob, snapshot_id: &str) {
-    let (ui2, job2, id) = (ui.clone(), job.clone(), snapshot_id.to_string());
-    let on_pick: Rc<dyn Fn(String)> = Rc::new(move |sub: String| {
-        let target = format!("/{sub}");
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let short = snapshot_id.get(..8).unwrap_or(snapshot_id);
+    let target = format!("{home}/Oortery/Restore-{short}");
+
+    let dialog = adw::AlertDialog::new(
+        Some("Restore this snapshot?"),
+        Some(&format!(
+            "Oortery will restore the files into a new folder:\n\n{target}\n\nYour existing files are not touched. If that folder already holds a restore, matching files in it may be overwritten."
+        )),
+    );
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("restore", "Restore");
+    dialog.set_response_appearance("restore", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("restore"));
+    dialog.set_close_response("cancel");
+
+    let (ui2, job2, id, target2) = (
+        ui.clone(),
+        job.clone(),
+        snapshot_id.to_string(),
+        target.clone(),
+    );
+    dialog.connect_response(None, move |_, resp| {
+        if resp != "restore" {
+            return;
+        }
         let (tx, rx) = async_channel::bounded(1);
-        let (job_t, id_t, target_t) = (job2.clone(), id.clone(), target.clone());
+        let (job_t, id_t, target_t) = (job2.clone(), id.clone(), target2.clone());
         std::thread::spawn(move || {
+            let _ = std::fs::create_dir_all(&target_t);
             let _ = tx.send_blocking(
                 esp_core::restore(&job_t, &id_t, &target_t).map_err(|e| e.to_string()),
             );
         });
-        let (ui_c, target_c) = (ui2.clone(), target.clone());
+        let (ui_c, target_c) = (ui2.clone(), target2.clone());
         glib::spawn_future_local(async move {
             match rx.recv().await {
                 Ok(Ok(())) => ui_c.toast(&format!("Restored to {target_c}")),
@@ -385,7 +411,7 @@ fn restore_snapshot(ui: &Rc<Ui>, job: &BackupJob, snapshot_id: &str) {
             }
         });
     });
-    folder_browser::present(ui, "/".to_string(), String::new(), on_pick);
+    dialog.present(Some(&ui.window));
 }
 
 /// The new-backup dialog: name, a source folder, a repo location, and a password.

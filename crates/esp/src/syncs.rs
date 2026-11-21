@@ -75,10 +75,10 @@ pub fn refresh(ui: &Rc<Ui>) {
     }
 
     // Headless aids: drive the first job's Run or name-check through the real path once mapped.
-    if std::env::var("ESP_AUTORUN").is_ok() {
+    if crate::aid("ESP_AUTORUN").is_some() {
         activate_first("media-playback-start-symbolic", ui);
     }
-    if std::env::var("ESP_PREFLIGHT_AUTORUN").is_ok() {
+    if crate::aid("ESP_PREFLIGHT_AUTORUN").is_some() {
         activate_first("edit-find-symbolic", ui);
     }
 }

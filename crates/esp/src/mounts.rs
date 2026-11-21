@@ -111,7 +111,7 @@ pub fn refresh(ui: &Rc<Ui>) {
     }
 
     // Headless aid: click the first Mount/Unmount toggle once the page maps.
-    if std::env::var("ESP_MOUNT_AUTORUN").is_ok() {
+    if crate::aid("ESP_MOUNT_AUTORUN").is_some() {
         if let Some(first) = ui.mounts_list.first_child() {
             if let Some(btn) = first_button(&first) {
                 glib::timeout_add_local_once(std::time::Duration::from_millis(800), move || {

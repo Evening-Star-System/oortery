@@ -79,6 +79,9 @@ impl Rcd {
     /// Drive) is dialed down so a many-small-files run cannot hammer it into the documented
     /// hang. See `tuning`.
     pub fn start_job(&self, job: &Job, group: &str) -> Result<i64> {
+        // Refuse a destructive Mirror whose local source is empty/unmounted, so rclone cannot
+        // delete the whole destination to match it. Applies to every run path (manual + scheduled).
+        crate::jobs::guard_local_mirror_source(job)?;
         let backend = crate::tuning::backend_of(self.port, job.dst.remote.as_deref());
         let config = crate::tuning::tuning_for(&backend).as_rc_config();
         let mut params = serde_json::json!({

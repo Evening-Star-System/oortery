@@ -168,6 +168,19 @@ fn prefer_bundled_tools() {
     }
 }
 
+/// Read a headless test aid (an `ESP_*` env var), but ONLY in a debug build. In a release build
+/// (the shipped AppImage) this always returns `None`, so the aids cannot be driven from the
+/// ambient environment: `ESP_NO_LOCK` can never bypass the app lock and no `*_AUTORUN` can fire.
+/// Dev and the Xvfb verification run debug builds, where the aids keep working.
+#[cfg(debug_assertions)]
+pub(crate) fn aid(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+#[cfg(not(debug_assertions))]
+pub(crate) fn aid(_name: &str) -> Option<String> {
+    None
+}
+
 fn main() -> glib::ExitCode {
     // Find our bundled rclone and restic. In a Flatpak/AppImage they sit next to this binary,
     // but the launcher does not put that dir on PATH, so on a machine with no system rclone the
@@ -403,8 +416,7 @@ fn build_ui(app: &adw::Application) {
             }
         }
     });
-    let start_idx = std::env::var("ESP_PAGE")
-        .ok()
+    let start_idx = aid("ESP_PAGE")
         .and_then(|name| PAGES.iter().position(|p| p.name == name))
         .unwrap_or(0) as i32;
     nav_list.select_row(nav_list.row_at_index(start_idx).as_ref());
@@ -550,7 +562,7 @@ fn build_ui(app: &adw::Application) {
             start_scheduler(&ui_r);
         })
     };
-    if esp_core::lock_enabled() && std::env::var("ESP_NO_LOCK").is_err() {
+    if esp_core::lock_enabled() && aid("ESP_NO_LOCK").is_none() {
         let r = reveal.clone();
         let lock = lockscreen::build(Rc::new(move || r()));
         window.set_content(Some(&lock));
@@ -590,27 +602,27 @@ fn build_ui(app: &adw::Application) {
     window.present();
 
     // Headless aid: auto-open the add-remote dialog for screenshots.
-    if std::env::var("ESP_DIALOG").is_ok() {
+    if aid("ESP_DIALOG").is_some() {
         add_remote::present(&ui);
     }
     // Headless aid: auto-open the new-sync dialog for screenshots.
-    if std::env::var("ESP_SYNC_DIALOG").is_ok() {
+    if aid("ESP_SYNC_DIALOG").is_some() {
         syncs::present_new(&ui, None);
     }
     // Headless aid: auto-open the folder browser at ESP_BROWSE (a local subpath) for screenshots.
-    if let Ok(start) = std::env::var("ESP_BROWSE") {
+    if let Some(start) = aid("ESP_BROWSE") {
         folder_browser::present(&ui, "/".to_string(), start, std::rc::Rc::new(|_| {}));
     }
     // Headless aid: auto-open the About dialog for screenshots.
-    if std::env::var("ESP_ABOUT").is_ok() {
+    if aid("ESP_ABOUT").is_some() {
         about::present(&window);
     }
     // Headless aid: auto-open the Settings dialog for screenshots.
-    if std::env::var("ESP_SETTINGS").is_ok() {
+    if aid("ESP_SETTINGS").is_some() {
         prefs::present(&ui);
     }
     // Headless aid: auto-open the new-backup dialog for screenshots.
-    if std::env::var("ESP_BACKUP_DIALOG").is_ok() {
+    if aid("ESP_BACKUP_DIALOG").is_some() {
         backups::present_new(&ui, None);
     }
 }

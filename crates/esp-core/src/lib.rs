@@ -166,9 +166,16 @@ pub fn list_providers() -> Result<Vec<Provider>> {
 /// Empty values are skipped. Suitable for config-value backends; OAuth backends need an
 /// interactive browser flow handled separately.
 pub fn create_remote(name: &str, backend: &str, params: &[(String, String)]) -> Result<()> {
+    if name.starts_with('-') {
+        anyhow::bail!("a remote name cannot begin with '-'");
+    }
+    // Flags first, then `--`, then the positionals (name, type, key/value pairs). After `--` a
+    // value beginning with '-' is stored literally instead of being read as an rclone flag.
     let mut args: Vec<String> = vec![
         "config".into(),
         "create".into(),
+        "--non-interactive".into(),
+        "--".into(),
         name.into(),
         backend.into(),
     ];
@@ -179,7 +186,6 @@ pub fn create_remote(name: &str, backend: &str, params: &[(String, String)]) -> 
         args.push(k.clone());
         args.push(v.clone());
     }
-    args.push("--non-interactive".into());
     let out = Command::new("rclone")
         .args(&args)
         .output()

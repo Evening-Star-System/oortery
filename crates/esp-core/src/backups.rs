@@ -218,13 +218,19 @@ pub fn run_backup<F: FnMut(BackupPhase)>(job: &BackupJob, mut on: F) -> Result<S
 /// `run_backup`).
 fn backup_once<F: FnMut(BackupPhase)>(job: &BackupJob, on: &mut F) -> Result<String> {
     let mut cmd = restic_cmd(job)?;
-    cmd.arg("backup").args(&job.sources).arg("--json");
+    cmd.arg("backup").arg("--json");
     // Skip anything the user excluded (build trees, caches). Blank patterns are ignored.
     for pat in &job.excludes {
         let pat = pat.trim();
         if !pat.is_empty() {
             cmd.arg("--exclude").arg(pat);
         }
+    }
+    // End of options: everything after `--` is a path, so a source beginning with `-` can never
+    // be read as a restic flag (e.g. `-o rclone.program=...`, which would run an arbitrary binary).
+    cmd.arg("--");
+    for src in &job.sources {
+        cmd.arg(src);
     }
     let mut child = cmd
         .stdout(Stdio::piped())
@@ -290,8 +296,19 @@ pub fn list_snapshots(job: &BackupJob) -> Result<Vec<Snapshot>> {
 
 /// Restore `snapshot_id` (or "latest") into `target`.
 pub fn restore(job: &BackupJob, snapshot_id: &str, target: &str) -> Result<()> {
+    // Backstop even if the GUI is bypassed: never restore onto the filesystem root, which would
+    // overwrite live files at their original paths. The caller picks a specific folder.
+    let t = target.trim();
+    if t.is_empty() || t == "/" {
+        bail!("refusing to restore into \"{target}\": choose a specific folder, not the filesystem root");
+    }
+    // `--` so the snapshot id (a positional) cannot be read as a flag.
     let out = restic_cmd(job)?
-        .args(["restore", snapshot_id, "--target", target])
+        .arg("restore")
+        .arg("--target")
+        .arg(target)
+        .arg("--")
+        .arg(snapshot_id)
         .output()
         .context("running restic restore")?;
     if !out.status.success() {
@@ -356,6 +373,23 @@ mod tests {
 
         std::env::remove_var("XDG_CONFIG_HOME");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn restore_refuses_filesystem_root() {
+        // The guard runs before restic is ever invoked, so this needs no repo/restic.
+        let job = BackupJob {
+            id: "r".into(),
+            name: "R".into(),
+            sources: vec![],
+            repo: Endpoint::local("/tmp/repo"),
+            excludes: Vec::new(),
+            schedule: Schedule::Manual,
+            last_run: None,
+        };
+        assert!(restore(&job, "latest", "/").is_err());
+        assert!(restore(&job, "latest", "  ").is_err());
+        assert!(restore(&job, "latest", "").is_err());
     }
 
     #[test]

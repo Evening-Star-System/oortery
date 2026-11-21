@@ -4,7 +4,7 @@
 //! `Endpoint::fs()` renders that so the UI stays backend-neutral. Jobs persist as a plain
 //! JSON array under the user's config dir.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -216,8 +216,11 @@ pub fn save_jobs(jobs: &[Job]) -> Result<()> {
     Ok(())
 }
 
-/// A stable, id-friendly slug from a name, disambiguated against existing ids.
-pub fn slug_id(name: &str, existing: &[Job]) -> String {
+/// Normalize an arbitrary string to a safe id slug: lowercased, only `[a-z0-9-]`, runs of any
+/// other characters collapsed to a single dash and trimmed, with `fallback` when nothing is left.
+/// This is the ONLY shape an id may take, so `/`, `..`, and control characters cannot survive into
+/// a filesystem path (e.g. the per-job `.pw` file). Shared by `slug_id` and `sanitize_id`.
+pub fn normalize_slug(name: &str, fallback: &str) -> String {
     let mut slug = String::new();
     let mut last_dash = false;
     for c in name.trim().to_lowercase().chars() {
@@ -230,22 +233,65 @@ pub fn slug_id(name: &str, existing: &[Job]) -> String {
         }
     }
     let base = slug.trim_matches('-').to_string();
-    let base = if base.is_empty() {
-        "sync".to_string()
+    if base.is_empty() {
+        fallback.to_string()
     } else {
         base
-    };
-    if !existing.iter().any(|j| j.id == base) {
-        return base;
+    }
+}
+
+/// Disambiguate `base` against ids already `taken`, appending `-2`, `-3`, ... until unique.
+pub fn unique_id(base: &str, taken: &[String]) -> String {
+    if !taken.iter().any(|id| id == base) {
+        return base.to_string();
     }
     let mut n = 2;
     loop {
         let candidate = format!("{base}-{n}");
-        if !existing.iter().any(|j| j.id == candidate) {
+        if !taken.iter().any(|id| id == &candidate) {
             return candidate;
         }
         n += 1;
     }
+}
+
+/// A stable, id-friendly slug from a name, disambiguated against existing jobs.
+pub fn slug_id(name: &str, existing: &[Job]) -> String {
+    let taken: Vec<String> = existing.iter().map(|j| j.id.clone()).collect();
+    unique_id(&normalize_slug(name, "sync"), &taken)
+}
+
+/// Re-slug an id arriving from an untrusted source (an imported bundle) and disambiguate it
+/// against ids already `taken`, so it can never carry `/`, `..`, or control characters.
+pub fn sanitize_id(raw: &str, taken: &[String]) -> String {
+    unique_id(&normalize_slug(raw, "imported"), taken)
+}
+
+/// True if a value would be read as a command-line flag (begins with `-`). Bundle-supplied paths,
+/// remotes, and sources must not be flag-shaped, or they could reach restic/rclone's option parser
+/// (e.g. restic's `-o rclone.program=...`).
+pub fn is_flaglike(s: &str) -> bool {
+    s.starts_with('-')
+}
+
+/// For a destructive Mirror, refuse when a LOCAL source is missing, unmounted, or empty: rclone
+/// would otherwise delete the whole destination to match an empty source (the external-drive
+/// footgun). `Ok(())` means safe to run. Copy is always safe; remote sources are left to the engine.
+pub fn guard_local_mirror_source(job: &Job) -> Result<()> {
+    if job.mode != SyncMode::Mirror || job.src.remote.is_some() {
+        return Ok(());
+    }
+    let empty = match std::fs::read_dir(&job.src.path) {
+        Ok(mut entries) => entries.next().is_none(),
+        Err(_) => true, // missing / unmounted / unreadable
+    };
+    if empty {
+        bail!(
+            "the source \"{}\" looks empty or unmounted; refusing to Mirror so the destination is not wiped",
+            job.src.path
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -275,6 +321,60 @@ mod tests {
             "home-photos-2"
         );
         assert_eq!(slug_id("   ", &[]), "sync");
+    }
+
+    #[test]
+    fn sanitize_id_strips_path_traversal() {
+        // A hostile imported id cannot keep slashes or dots: no escaping the config dir.
+        assert_eq!(sanitize_id("../../../../tmp/evil", &[]), "tmp-evil");
+        assert_eq!(sanitize_id("a/b/c", &[]), "a-b-c");
+        assert_eq!(sanitize_id("", &[]), "imported");
+        assert_eq!(sanitize_id("...", &[]), "imported");
+        // Disambiguates against ids already taken.
+        assert_eq!(sanitize_id("docs", &["docs".to_string()]), "docs-2");
+    }
+
+    #[test]
+    fn flaglike_detects_option_shaped_values() {
+        assert!(is_flaglike("-o"));
+        assert!(is_flaglike("--target"));
+        assert!(!is_flaglike("/home/me/docs"));
+        assert!(!is_flaglike("gdrive:backup"));
+    }
+
+    #[test]
+    fn mirror_guard_refuses_empty_or_missing_local_source() {
+        let mk = |path: &str, mode| Job {
+            id: "j".into(),
+            name: "J".into(),
+            src: Endpoint::local(path),
+            dst: Endpoint::remote("gdrive", "x"),
+            mode,
+            schedule: Schedule::Manual,
+            last_run: None,
+        };
+        let base = std::env::temp_dir().join(format!("esp-mirror-guard-{}", std::process::id()));
+        let empty = base.join("empty");
+        let full = base.join("full");
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::create_dir_all(&full).unwrap();
+        std::fs::write(full.join("f.txt"), b"x").unwrap();
+        let missing = base.join("does-not-exist");
+
+        // Mirror from an empty or missing local source is refused.
+        assert!(guard_local_mirror_source(&mk(empty.to_str().unwrap(), SyncMode::Mirror)).is_err());
+        assert!(
+            guard_local_mirror_source(&mk(missing.to_str().unwrap(), SyncMode::Mirror)).is_err()
+        );
+        // A non-empty source is fine, and Copy is never guarded.
+        assert!(guard_local_mirror_source(&mk(full.to_str().unwrap(), SyncMode::Mirror)).is_ok());
+        assert!(guard_local_mirror_source(&mk(empty.to_str().unwrap(), SyncMode::Copy)).is_ok());
+        // A remote source is left to the engine, never refused here.
+        let mut remote = mk("x", SyncMode::Mirror);
+        remote.src = Endpoint::remote("gdrive", "data");
+        assert!(guard_local_mirror_source(&remote).is_ok());
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

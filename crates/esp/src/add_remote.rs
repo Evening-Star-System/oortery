@@ -20,7 +20,7 @@ pub fn present(ui: &Rc<Ui>) {
     dialog.present(Some(&ui.window));
 
     // Headless aid: jump straight to a provider's config form for screenshots.
-    if let Ok(name) = std::env::var("ESP_DIALOG_PROVIDER") {
+    if let Some(name) = crate::aid("ESP_DIALOG_PROVIDER") {
         if let Some(p) = ui.providers.iter().find(|p| p.name == name) {
             nav.push(&config_page(ui, p, &dialog));
         }
