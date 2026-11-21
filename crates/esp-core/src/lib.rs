@@ -14,6 +14,7 @@ pub mod connect;
 pub mod engine;
 pub mod jobs;
 pub mod preflight;
+pub mod settings;
 pub mod stall;
 pub mod tuning;
 
@@ -27,6 +28,7 @@ pub use engine::{
 };
 pub use jobs::{load_jobs, save_jobs, slug_id, Endpoint, Job, SyncMode};
 pub use preflight::{scan_dir, Hazard, Issue};
+pub use settings::{load_window_state, save_window_state, WindowState};
 pub use stall::{StallTracker, DEFAULT_STALL_SECS};
 pub use tuning::{backend_of, tuning_for, Tuning};
 

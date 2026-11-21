@@ -97,7 +97,31 @@ pub fn refresh(ui: &Rc<Ui>) {
     ui.node_count.set(remotes.len().max(6));
 }
 
+/// Prepend this executable's own directory to PATH, so a bundled rclone/restic (shipped beside
+/// the binary in a Flatpak/AppImage) is found even when the launcher leaves it off PATH.
+fn prefer_bundled_tools() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(dir) = exe.parent() else {
+        return;
+    };
+    let mut paths = vec![dir.to_path_buf()];
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    if let Ok(joined) = std::env::join_paths(paths) {
+        std::env::set_var("PATH", joined);
+    }
+}
+
 fn main() -> glib::ExitCode {
+    // Find our bundled rclone and restic. In a Flatpak/AppImage they sit next to this binary,
+    // but the launcher does not put that dir on PATH, so on a machine with no system rclone the
+    // app would see zero providers and no backups. Prepend our own directory so the bundled
+    // tools win (and are found at all). Harmless in dev, where system tools stay reachable.
+    prefer_bundled_tools();
+
     // Oortery always wears its night sky. Clear any inherited GTK_THEME (an AppImage launcher,
     // or a user's shell) before GTK starts, so nothing overrides our forced dark scheme.
     std::env::remove_var("GTK_THEME");
@@ -305,14 +329,29 @@ fn build_ui(app: &adw::Application) {
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&split));
 
+    // Reopen at the size the user left it (defaults are large enough to show the whole UI).
+    let ws = esp_core::load_window_state();
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .default_width(1120)
-        .default_height(740)
+        .default_width(ws.width)
+        .default_height(ws.height)
         .width_request(360)
         .height_request(480)
         .content(&toasts)
         .build();
+    if ws.maximized {
+        window.maximize();
+    }
+    // Remember the geometry on close. default_width/height track the unmaximized size, so a
+    // maximized-then-restored session still reopens at a sensible size.
+    window.connect_close_request(|w| {
+        esp_core::save_window_state(&esp_core::WindowState {
+            width: w.default_width(),
+            height: w.default_height(),
+            maximized: w.is_maximized(),
+        });
+        glib::Propagation::Proceed
+    });
 
     let ui = Rc::new(Ui {
         window: window.clone(),
