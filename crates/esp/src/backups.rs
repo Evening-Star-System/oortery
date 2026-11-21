@@ -133,6 +133,33 @@ fn job_row(ui: &Rc<Ui>, job: BackupJob) -> adw::ActionRow {
     let (ui_s, job_s) = (ui.clone(), job.clone());
     snaps.connect_clicked(move |_| present_snapshots(&ui_s, &job_s));
 
+    // Edit / Delete menu. Delete also removes the repo's password file (not the snapshots).
+    let (menu, edit_btn, del_btn, pop) = syncs::row_menu();
+    row.add_suffix(&menu);
+    {
+        let (ui_e, job_e, pop_e) = (ui.clone(), job.clone(), pop.clone());
+        edit_btn.connect_clicked(move |_| {
+            pop_e.popdown();
+            present_new(&ui_e, Some(job_e.clone()));
+        });
+        let (ui_d, pop_d, id, nm) = (ui.clone(), pop.clone(), job.id.clone(), job.name.clone());
+        del_btn.connect_clicked(move |_| {
+            pop_d.popdown();
+            syncs::confirm_delete(&ui_d, &nm, "backup", {
+                let (ui2, id2) = (ui_d.clone(), id.clone());
+                move || {
+                    let mut jobs = esp_core::load_backups().unwrap_or_default();
+                    jobs.retain(|j| j.id != id2);
+                    let _ = esp_core::save_backups(&jobs);
+                    if let Ok(pw) = esp_core::password_file(&id2) {
+                        let _ = std::fs::remove_file(pw);
+                    }
+                    refresh(&ui2);
+                }
+            });
+        });
+    }
+
     let ui_r = ui.clone();
     let row_r = row.clone();
     let bar_r = bar.clone();
@@ -285,7 +312,7 @@ fn restore_snapshot(ui: &Rc<Ui>, job: &BackupJob, snapshot_id: &str) {
 }
 
 /// The new-backup dialog: name, a source folder, a repo location, and a password.
-pub fn present_new(ui: &Rc<Ui>) {
+pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
     let remotes = esp_core::list_remotes().unwrap_or_default();
     let mut options: Vec<Option<String>> = vec![None];
     let mut labels: Vec<String> = vec!["This computer".to_string()];
@@ -300,7 +327,11 @@ pub fn present_new(ui: &Rc<Ui>) {
     let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
 
     let dialog = adw::Dialog::builder()
-        .title("New backup")
+        .title(if edit.is_some() {
+            "Edit backup"
+        } else {
+            "New backup"
+        })
         .content_width(560)
         .content_height(640)
         .build();
@@ -354,11 +385,20 @@ pub fn present_new(ui: &Rc<Ui>) {
     gpw.add(&pw_row);
     prefs.add(&gpw);
 
+    // Prefill when editing an existing backup (the password stays in its file, not shown).
+    if let Some(j) = &edit {
+        name_row.set_text(&j.name);
+        src_path.set_text(j.sources.first().map(|s| s.as_str()).unwrap_or(""));
+        repo_combo.set_selected(syncs::combo_index_for(&options, &j.repo));
+        repo_path.set_text(&j.repo.path);
+        pw_row.set_title("Password (leave blank to keep the current one)");
+    }
+
     let scroll = gtk::ScrolledWindow::new();
     scroll.set_vexpand(true);
     scroll.set_child(Some(&prefs));
     let header = adw::HeaderBar::new();
-    let create = gtk::Button::with_label("Create");
+    let create = gtk::Button::with_label(if edit.is_some() { "Save" } else { "Create" });
     create.add_css_class("suggested-action");
     header.pack_end(&create);
     let tv = adw::ToolbarView::new();
@@ -368,6 +408,7 @@ pub fn present_new(ui: &Rc<Ui>) {
 
     let ui2 = ui.clone();
     let dlg2 = dialog.clone();
+    let edit_id = edit.as_ref().map(|j| j.id.clone());
     create.connect_clicked(move |_| {
         let name = name_row.text().trim().to_string();
         if name.is_empty() {
@@ -380,7 +421,7 @@ pub fn present_new(ui: &Rc<Ui>) {
             return;
         }
         let password = pw_row.text().to_string();
-        if password.is_empty() {
+        if password.is_empty() && edit_id.is_none() {
             ui2.toast("Set a password to encrypt the repository.");
             return;
         }
@@ -391,23 +432,36 @@ pub fn present_new(ui: &Rc<Ui>) {
         }
 
         let mut jobs = esp_core::load_backups().unwrap_or_default();
-        let base = esp_core::slug_id(&name, &[]);
-        let mut id = base.clone();
-        let mut n = 2;
-        while jobs.iter().any(|j| j.id == id) {
-            id = format!("{base}-{n}");
-            n += 1;
+        let id = match &edit_id {
+            Some(id) => id.clone(),
+            None => {
+                let base = esp_core::slug_id(&name, &[]);
+                let mut id = base.clone();
+                let mut n = 2;
+                while jobs.iter().any(|j| j.id == id) {
+                    id = format!("{base}-{n}");
+                    n += 1;
+                }
+                id
+            }
+        };
+        // Only (re)write the password when one was entered; blank on edit keeps the current.
+        if !password.is_empty() {
+            if let Err(e) = esp_core::save_password(&id, &password) {
+                ui2.toast(&format!("Could not save the password: {e}"));
+                return;
+            }
         }
-        if let Err(e) = esp_core::save_password(&id, &password) {
-            ui2.toast(&format!("Could not save the password: {e}"));
-            return;
-        }
-        jobs.push(BackupJob {
-            id,
+        let new_job = BackupJob {
+            id: id.clone(),
             name: name.clone(),
             sources: vec![source],
             repo,
-        });
+        };
+        match jobs.iter().position(|j| j.id == id) {
+            Some(pos) => jobs[pos] = new_job,
+            None => jobs.push(new_job),
+        }
         match esp_core::save_backups(&jobs) {
             Ok(()) => {
                 dlg2.close();

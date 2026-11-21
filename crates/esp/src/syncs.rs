@@ -136,6 +136,30 @@ fn job_row(ui: &Rc<Ui>, job: Job) -> adw::ActionRow {
     run.add_css_class("flat");
     row.add_suffix(&run);
 
+    // Edit / Delete menu.
+    let (menu, edit_btn, del_btn, pop) = row_menu();
+    row.add_suffix(&menu);
+    {
+        let (ui_e, job_e, pop_e) = (ui.clone(), job.clone(), pop.clone());
+        edit_btn.connect_clicked(move |_| {
+            pop_e.popdown();
+            present_new(&ui_e, Some(job_e.clone()));
+        });
+        let (ui_d, pop_d, id, nm) = (ui.clone(), pop.clone(), job.id.clone(), job.name.clone());
+        del_btn.connect_clicked(move |_| {
+            pop_d.popdown();
+            confirm_delete(&ui_d, &nm, "sync", {
+                let (ui2, id2) = (ui_d.clone(), id.clone());
+                move || {
+                    let mut jobs = esp_core::load_jobs().unwrap_or_default();
+                    jobs.retain(|j| j.id != id2);
+                    let _ = esp_core::save_jobs(&jobs);
+                    refresh(&ui2);
+                }
+            });
+        });
+    }
+
     let ui2 = ui.clone();
     let row2 = row.clone();
     let bar2 = bar.clone();
@@ -224,9 +248,9 @@ fn run_job(
     });
 }
 
-/// The new-sync dialog: name, a source and destination built from configured remotes or a
-/// local path, and a mode. Validates and saves, then refreshes the list.
-pub fn present_new(ui: &Rc<Ui>) {
+/// The new-/edit-sync dialog: name, a source and destination built from configured remotes or
+/// a local path, and a mode. `edit` prefills it and saves over the same job. Refreshes after.
+pub fn present_new(ui: &Rc<Ui>, edit: Option<Job>) {
     let remotes = esp_core::list_remotes().unwrap_or_default();
     // Combo options: index 0 is this computer (local), then each configured remote.
     let mut options: Vec<Option<String>> = vec![None];
@@ -242,7 +266,11 @@ pub fn present_new(ui: &Rc<Ui>) {
     let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
 
     let dialog = adw::Dialog::builder()
-        .title("New sync")
+        .title(if edit.is_some() {
+            "Edit sync"
+        } else {
+            "New sync"
+        })
         .content_width(560)
         .content_height(620)
         .build();
@@ -299,12 +327,22 @@ pub fn present_new(ui: &Rc<Ui>) {
     });
     prefs.add(&gmode);
 
+    // Prefill when editing an existing job.
+    if let Some(j) = &edit {
+        name_row.set_text(&j.name);
+        src_combo.set_selected(combo_index_for(&options, &j.src));
+        src_path.set_text(&j.src.path);
+        dst_combo.set_selected(combo_index_for(&options, &j.dst));
+        dst_path.set_text(&j.dst.path);
+        mode_combo.set_selected(u32::from(j.mode == SyncMode::Mirror));
+    }
+
     let scroll = gtk::ScrolledWindow::new();
     scroll.set_vexpand(true);
     scroll.set_child(Some(&prefs));
 
     let header = adw::HeaderBar::new();
-    let create = gtk::Button::with_label("Create");
+    let create = gtk::Button::with_label(if edit.is_some() { "Save" } else { "Create" });
     create.add_css_class("suggested-action");
     header.pack_end(&create);
     let tv = adw::ToolbarView::new();
@@ -314,6 +352,7 @@ pub fn present_new(ui: &Rc<Ui>) {
 
     let ui2 = ui.clone();
     let dlg2 = dialog.clone();
+    let edit_id = edit.as_ref().map(|j| j.id.clone());
     create.connect_clicked(move |_| {
         let name = name_row.text().trim().to_string();
         if name.is_empty() {
@@ -332,14 +371,21 @@ pub fn present_new(ui: &Rc<Ui>) {
             SyncMode::Copy
         };
         let mut jobs = esp_core::load_jobs().unwrap_or_default();
-        let id = esp_core::slug_id(&name, &jobs);
-        jobs.push(Job {
-            id,
+        let id = match &edit_id {
+            Some(id) => id.clone(),
+            None => esp_core::slug_id(&name, &jobs),
+        };
+        let new_job = Job {
+            id: id.clone(),
             name: name.clone(),
             src,
             dst,
             mode,
-        });
+        };
+        match jobs.iter().position(|j| j.id == id) {
+            Some(pos) => jobs[pos] = new_job,
+            None => jobs.push(new_job),
+        }
         match esp_core::save_jobs(&jobs) {
             Ok(()) => {
                 dlg2.close();
@@ -411,6 +457,61 @@ pub(crate) fn endpoint_from(options: &[Option<String>], selected: u32, path: &st
         Some(remote) => Endpoint::remote(remote, path),
         None => Endpoint::local(path),
     }
+}
+
+/// The combo index matching an endpoint's remote (0 = this computer).
+pub(crate) fn combo_index_for(options: &[Option<String>], ep: &Endpoint) -> u32 {
+    options.iter().position(|o| o == &ep.remote).unwrap_or(0) as u32
+}
+
+/// A "more actions" menu button with Edit and Delete items. Returns the button plus the two
+/// action buttons and the popover for the caller to wire. Shared by syncs and backups.
+pub(crate) fn row_menu() -> (gtk::MenuButton, gtk::Button, gtk::Button, gtk::Popover) {
+    let menu = gtk::MenuButton::builder()
+        .icon_name("view-more-symbolic")
+        .valign(gtk::Align::Center)
+        .build();
+    menu.add_css_class("flat");
+    let b = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    b.set_margin_top(4);
+    b.set_margin_bottom(4);
+    b.set_margin_start(4);
+    b.set_margin_end(4);
+    let edit = gtk::Button::with_label("Edit");
+    edit.add_css_class("flat");
+    edit.set_halign(gtk::Align::Fill);
+    let del = gtk::Button::with_label("Delete");
+    del.add_css_class("flat");
+    del.set_halign(gtk::Align::Fill);
+    b.append(&edit);
+    b.append(&del);
+    let pop = gtk::Popover::new();
+    pop.set_child(Some(&b));
+    menu.set_popover(Some(&pop));
+    (menu, edit, del, pop)
+}
+
+/// Confirm a deletion, running `on_confirm` only if the user agrees. `noun` is "sync"/"backup".
+pub(crate) fn confirm_delete(ui: &Rc<Ui>, name: &str, noun: &str, on_confirm: impl Fn() + 'static) {
+    let dialog = adw::AlertDialog::new(
+        Some(&format!("Delete {name}?")),
+        Some(&format!(
+            "This removes the {noun}. It does not delete any of your files."
+        )),
+    );
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("delete", "Delete");
+    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+    let (ui2, name2) = (ui.clone(), name.to_string());
+    dialog.connect_response(None, move |_, resp| {
+        if resp == "delete" {
+            on_confirm();
+            ui2.toast(&format!("Deleted {name2}"));
+        }
+    });
+    dialog.present(Some(&ui.window));
 }
 
 /// A local endpoint needs a path; a remote endpoint may point at the whole remote.

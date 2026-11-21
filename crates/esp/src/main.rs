@@ -318,9 +318,9 @@ fn build_ui(app: &adw::Application) {
     let ui_for_add = ui.clone();
     add_btn.connect_clicked(move |_| add_remote::present(&ui_for_add));
     let ui_for_new_sync = ui.clone();
-    new_sync_btn.connect_clicked(move |_| syncs::present_new(&ui_for_new_sync));
+    new_sync_btn.connect_clicked(move |_| syncs::present_new(&ui_for_new_sync, None));
     let ui_for_new_backup = ui.clone();
-    new_backup_btn.connect_clicked(move |_| backups::present_new(&ui_for_new_backup));
+    new_backup_btn.connect_clicked(move |_| backups::present_new(&ui_for_new_backup, None));
 
     window.present();
 
@@ -330,7 +330,7 @@ fn build_ui(app: &adw::Application) {
     }
     // Headless aid: auto-open the new-sync dialog for screenshots.
     if std::env::var("ESP_SYNC_DIALOG").is_ok() {
-        syncs::present_new(&ui);
+        syncs::present_new(&ui, None);
     }
     // Headless aid: auto-open the folder browser at ESP_BROWSE (a local subpath) for screenshots.
     if let Ok(start) = std::env::var("ESP_BROWSE") {
@@ -338,7 +338,7 @@ fn build_ui(app: &adw::Application) {
     }
     // Headless aid: auto-open the new-backup dialog for screenshots.
     if std::env::var("ESP_BACKUP_DIALOG").is_ok() {
-        backups::present_new(&ui);
+        backups::present_new(&ui, None);
     }
 }
 

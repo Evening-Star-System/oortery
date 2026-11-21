@@ -15,8 +15,8 @@ pub mod engine;
 pub mod jobs;
 
 pub use backups::{
-    init_repo, list_snapshots, load_backups, restic_path, restore, run_backup, save_backups,
-    save_password, BackupJob, Snapshot,
+    init_repo, list_snapshots, load_backups, password_file, restic_path, restore, run_backup,
+    save_backups, save_password, BackupJob, Snapshot,
 };
 pub use engine::{
     activity, list_dirs, list_mounts, mount, rc_at, unmount, Activity, DirEntry, JobStats,
