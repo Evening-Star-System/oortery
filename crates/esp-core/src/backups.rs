@@ -22,6 +22,11 @@ pub struct BackupJob {
     pub sources: Vec<String>,
     /// Where the restic repository lives (local path, or a cloud via rclone).
     pub repo: Endpoint,
+    /// restic exclude patterns (e.g. "node_modules", "*.tmp", ".git"). Skips matching files
+    /// so a huge build tree does not bloat the repo or stall a touchy backend. `default` keeps
+    /// older stored jobs (without the field) loadable.
+    #[serde(default)]
+    pub excludes: Vec<String>,
 }
 
 /// One restic snapshot.
@@ -206,10 +211,16 @@ pub fn run_backup<F: FnMut(BackupPhase)>(job: &BackupJob, mut on: F) -> Result<S
 /// One restic backup attempt. Reports `Backing` progress; does not verify or recover (see
 /// `run_backup`).
 fn backup_once<F: FnMut(BackupPhase)>(job: &BackupJob, on: &mut F) -> Result<String> {
-    let mut child = restic_cmd(job)?
-        .arg("backup")
-        .args(&job.sources)
-        .arg("--json")
+    let mut cmd = restic_cmd(job)?;
+    cmd.arg("backup").args(&job.sources).arg("--json");
+    // Skip anything the user excluded (build trees, caches). Blank patterns are ignored.
+    for pat in &job.excludes {
+        let pat = pat.trim();
+        if !pat.is_empty() {
+            cmd.arg("--exclude").arg(pat);
+        }
+    }
+    let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -314,6 +325,7 @@ mod tests {
             name: "Test".into(),
             sources: vec![data.to_string_lossy().into_owned()],
             repo: Endpoint::local(repo.to_string_lossy().into_owned()),
+            excludes: Vec::new(),
         };
         save_password(&job.id, "esp-test-pw").unwrap();
         init_repo(&job).expect("init");
@@ -364,6 +376,7 @@ mod tests {
             name: "Unlock".into(),
             sources: vec![],
             repo: Endpoint::local(repo.to_string_lossy().into_owned()),
+            excludes: Vec::new(),
         };
         save_password(&job.id, "pw").unwrap();
         init_repo(&job).expect("init");
@@ -401,6 +414,7 @@ mod tests {
             name: "Check".into(),
             sources: vec![data.to_string_lossy().into_owned()],
             repo: Endpoint::local(repo.to_string_lossy().into_owned()),
+            excludes: Vec::new(),
         };
         save_password(&job.id, "pw").unwrap();
         init_repo(&job).expect("init");
@@ -417,6 +431,56 @@ mod tests {
         assert!(
             msg.contains("integrity check failed"),
             "unexpected error: {msg}"
+        );
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn backup_excludes_matching_paths() {
+        if restic_path().is_none() {
+            eprintln!("restic not installed; skipping");
+            return;
+        }
+        let _env = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("esp-excl-{}", std::process::id()));
+        std::env::set_var("XDG_CONFIG_HOME", base.join("cfg"));
+        let data = base.join("data");
+        let repo = base.join("repo");
+        let restored = base.join("restored");
+        std::fs::create_dir_all(data.join("node_modules/dep")).unwrap();
+        std::fs::create_dir_all(&restored).unwrap();
+        std::fs::write(data.join("keep.txt"), b"keep me").unwrap();
+        std::fs::write(data.join("node_modules/dep/junk.js"), b"skip me").unwrap();
+
+        let job = BackupJob {
+            id: "excl".into(),
+            name: "Excl".into(),
+            sources: vec![data.to_string_lossy().into_owned()],
+            repo: Endpoint::local(repo.to_string_lossy().into_owned()),
+            excludes: vec!["node_modules".into()],
+        };
+        save_password(&job.id, "pw").unwrap();
+        init_repo(&job).expect("init");
+        run_backup(&job, |_phase| {}).expect("backup + verify");
+
+        restore(&job, "latest", restored.to_str().unwrap()).expect("restore");
+        let files: Vec<PathBuf> = std::fs::read_dir(&restored)
+            .unwrap()
+            .flat_map(|e| walk(e.unwrap().path()))
+            .collect();
+        assert!(
+            files.iter().any(|p| p.ends_with("keep.txt")),
+            "kept file should be present"
+        );
+        assert!(
+            !files
+                .iter()
+                .any(|p| p.to_string_lossy().contains("node_modules")),
+            "excluded node_modules must not be in the snapshot"
         );
 
         std::env::remove_var("XDG_CONFIG_HOME");

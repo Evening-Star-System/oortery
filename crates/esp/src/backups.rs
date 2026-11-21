@@ -70,7 +70,9 @@ pub fn refresh(ui: &Rc<Ui>) {
     if esp_core::restic_path().is_none() {
         let row = adw::ActionRow::builder()
             .title("restic is not installed")
-            .subtitle("Backups need the restic tool on your system. Install it, then restart Oortery.")
+            .subtitle(
+                "Backups need the restic tool on your system. Install it, then restart Oortery.",
+            )
             .build();
         row.add_prefix(&gtk::Image::from_icon_name("dialog-warning-symbolic"));
         ui.backups_list.append(&row);
@@ -386,6 +388,15 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
     prefs.add(&grepo);
     syncs::wire_browse(ui, options.clone(), &repo_combo, &repo_path, &repo_browse);
 
+    // Exclude patterns: skip build trees and caches so a huge folder does not bloat the repo.
+    let gexcl = adw::PreferencesGroup::builder()
+        .title("Exclude")
+        .description("Skip matching files. Comma-separated (e.g. node_modules, .git, *.tmp).")
+        .build();
+    let excl_row = adw::EntryRow::builder().title("Patterns").build();
+    gexcl.add(&excl_row);
+    prefs.add(&gexcl);
+
     let gpw = adw::PreferencesGroup::builder()
         .title("Password")
         .description(
@@ -402,6 +413,7 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
         src_path.set_text(j.sources.first().map(|s| s.as_str()).unwrap_or(""));
         repo_combo.set_selected(syncs::combo_index_for(&options, &j.repo));
         repo_path.set_text(&j.repo.path);
+        excl_row.set_text(&j.excludes.join(", "));
         pw_row.set_title("Password (leave blank to keep the current one)");
     }
 
@@ -463,11 +475,18 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
                 return;
             }
         }
+        let excludes = excl_row
+            .text()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
         let new_job = BackupJob {
             id: id.clone(),
             name: name.clone(),
             sources: vec![source],
             repo,
+            excludes,
         };
         match jobs.iter().position(|j| j.id == id) {
             Some(pos) => jobs[pos] = new_job,
