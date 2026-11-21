@@ -11,6 +11,7 @@ mod backups;
 mod constellation;
 mod folder_browser;
 mod mounts;
+mod prefs;
 mod spinner;
 mod syncs;
 
@@ -383,6 +384,10 @@ fn build_ui(app: &adw::Application) {
     menu_box.set_margin_bottom(4);
     menu_box.set_margin_start(4);
     menu_box.set_margin_end(4);
+    let settings_item = gtk::Button::with_label("Settings");
+    settings_item.add_css_class("flat");
+    settings_item.set_halign(gtk::Align::Fill);
+    menu_box.append(&settings_item);
     let about_item = gtk::Button::with_label("About Oortery");
     about_item.add_css_class("flat");
     about_item.set_halign(gtk::Align::Fill);
@@ -474,6 +479,13 @@ fn build_ui(app: &adw::Application) {
             about::present(&win);
         });
     }
+    {
+        let (ui_s, pop) = (ui.clone(), menu_pop.clone());
+        settings_item.connect_clicked(move |_| {
+            pop.popdown();
+            prefs::present(&ui_s);
+        });
+    }
 
     let ui_for_add = ui.clone();
     add_btn.connect_clicked(move |_| add_remote::present(&ui_for_add));
@@ -499,6 +511,10 @@ fn build_ui(app: &adw::Application) {
     // Headless aid: auto-open the About dialog for screenshots.
     if std::env::var("ESP_ABOUT").is_ok() {
         about::present(&window);
+    }
+    // Headless aid: auto-open the Settings dialog for screenshots.
+    if std::env::var("ESP_SETTINGS").is_ok() {
+        prefs::present(&ui);
     }
     // Headless aid: auto-open the new-backup dialog for screenshots.
     if std::env::var("ESP_BACKUP_DIALOG").is_ok() {

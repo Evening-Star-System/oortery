@@ -9,15 +9,18 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::process::Command;
 
+pub mod autostart;
 pub mod backups;
 pub mod connect;
 pub mod engine;
 pub mod jobs;
+pub mod portable;
 pub mod preflight;
 pub mod settings;
 pub mod stall;
 pub mod tuning;
 
+pub use autostart::{autostart_enabled, set_autostart};
 pub use backups::{
     check_repo, init_repo, list_snapshots, load_backups, password_file, restic_path, restore,
     run_backup, save_backups, save_password, unlock_repo, BackupJob, BackupPhase, Snapshot,
@@ -27,6 +30,7 @@ pub use engine::{
     JobStatus, Mount, Rcd, Transfer,
 };
 pub use jobs::{load_jobs, now_unix, save_jobs, slug_id, Endpoint, Job, Schedule, SyncMode};
+pub use portable::{export_bundle, import_bundle, ImportResult};
 pub use preflight::{scan_dir, Hazard, Issue};
 pub use settings::{load_window_state, save_window_state, WindowState};
 pub use stall::{StallTracker, DEFAULT_STALL_SECS};
