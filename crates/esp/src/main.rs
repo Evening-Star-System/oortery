@@ -10,6 +10,7 @@ mod add_remote;
 mod backups;
 mod constellation;
 mod folder_browser;
+mod lockscreen;
 mod mounts;
 mod prefs;
 mod spinner;
@@ -526,12 +527,27 @@ fn build_ui(app: &adw::Application) {
         active_syncs: Rc::new(Cell::new(0)),
         run_seq: Cell::new(0),
     });
-    refresh(&ui);
-    syncs::refresh(&ui);
-    mounts::refresh(&ui);
-    backups::refresh(&ui);
-    activity::start_polling(&ui);
-    start_scheduler(&ui);
+    // Reveal the app: show the real content and start reading data / scheduled work. Deferred
+    // behind the lock screen when an app-lock password is set, so nothing runs while locked.
+    let reveal: Rc<dyn Fn()> = {
+        let (ui_r, window_r) = (ui.clone(), window.clone());
+        Rc::new(move || {
+            window_r.set_content(Some(&ui_r.toasts));
+            refresh(&ui_r);
+            syncs::refresh(&ui_r);
+            mounts::refresh(&ui_r);
+            backups::refresh(&ui_r);
+            activity::start_polling(&ui_r);
+            start_scheduler(&ui_r);
+        })
+    };
+    if esp_core::lock_enabled() && std::env::var("ESP_NO_LOCK").is_err() {
+        let r = reveal.clone();
+        let lock = lockscreen::build(Rc::new(move || r()));
+        window.set_content(Some(&lock));
+    } else {
+        reveal();
+    }
 
     {
         let (win, pop) = (window.clone(), menu_pop.clone());

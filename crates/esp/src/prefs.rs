@@ -61,6 +61,49 @@ pub fn present(ui: &Rc<Ui>) {
     g_file.add(&import_row);
 
     page.add(&g_file);
+
+    // Security: an optional password to open the app.
+    let g_sec = adw::PreferencesGroup::builder()
+        .title("Security")
+        .description(
+            "A password to open Oortery on a shared machine. It gates access to the app; it does \
+             not encrypt your remotes or backups. If you forget it, delete lock.hash in the config \
+             folder to reset.",
+        )
+        .build();
+    if esp_core::lock_enabled() {
+        let change_row = adw::ActionRow::builder().title("App lock is on").build();
+        change_row.add_prefix(&gtk::Image::from_icon_name("changes-prevent-symbolic"));
+        let change = gtk::Button::with_label("Change");
+        change.set_valign(gtk::Align::Center);
+        let ui_c = ui.clone();
+        change.connect_clicked(move |_| set_password_dialog(&ui_c));
+        change_row.add_suffix(&change);
+        g_sec.add(&change_row);
+
+        let remove_row = adw::ActionRow::builder().title("Remove app lock").build();
+        let remove = gtk::Button::with_label("Remove");
+        remove.add_css_class("destructive-action");
+        remove.set_valign(gtk::Align::Center);
+        let ui_r = ui.clone();
+        remove.connect_clicked(move |_| remove_lock_dialog(&ui_r));
+        remove_row.add_suffix(&remove);
+        g_sec.add(&remove_row);
+    } else {
+        let set_row = adw::ActionRow::builder()
+            .title("App lock is off")
+            .subtitle("Require a password to open Oortery.")
+            .build();
+        set_row.add_prefix(&gtk::Image::from_icon_name("changes-allow-symbolic"));
+        let setb = gtk::Button::with_label("Set a password");
+        setb.set_valign(gtk::Align::Center);
+        let ui_s = ui.clone();
+        setb.connect_clicked(move |_| set_password_dialog(&ui_s));
+        set_row.add_suffix(&setb);
+        g_sec.add(&set_row);
+    }
+    page.add(&g_sec);
+
     dialog.add(&page);
 
     let ui_e = ui.clone();
@@ -120,6 +163,87 @@ fn import_settings(ui: &Rc<Ui>) {
             Err(e) => ui.toast(&format!("Could not import: {e}")),
         }
     });
+}
+
+/// Prompt for a new app-lock password (entered twice), then set it.
+fn set_password_dialog(ui: &Rc<Ui>) {
+    let new = adw::PasswordEntryRow::builder()
+        .title("New password")
+        .build();
+    let confirm = adw::PasswordEntryRow::builder()
+        .title("Confirm password")
+        .build();
+    let list = gtk::ListBox::new();
+    list.add_css_class("boxed-list");
+    list.set_selection_mode(gtk::SelectionMode::None);
+    list.append(&new);
+    list.append(&confirm);
+
+    let dialog = adw::AlertDialog::new(Some("Set a password"), None);
+    dialog.set_extra_child(Some(&list));
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("set", "Set");
+    dialog.set_response_appearance("set", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("set"));
+    dialog.set_close_response("cancel");
+
+    let win = ui.window.clone();
+    let ui = ui.clone();
+    dialog.connect_response(None, move |_, resp| {
+        if resp != "set" {
+            return;
+        }
+        let (a, b) = (new.text().to_string(), confirm.text().to_string());
+        if a.is_empty() {
+            ui.toast("Enter a password.");
+        } else if a != b {
+            ui.toast("The passwords do not match.");
+        } else {
+            match esp_core::set_lock(&a) {
+                Ok(()) => ui.toast("App lock enabled. It takes effect next time you open Oortery."),
+                Err(e) => ui.toast(&format!("Could not set the password: {e}")),
+            }
+        }
+    });
+    dialog.present(Some(&win));
+}
+
+/// Confirm the current password, then remove the app lock.
+fn remove_lock_dialog(ui: &Rc<Ui>) {
+    let current = adw::PasswordEntryRow::builder()
+        .title("Current password")
+        .build();
+    let list = gtk::ListBox::new();
+    list.add_css_class("boxed-list");
+    list.set_selection_mode(gtk::SelectionMode::None);
+    list.append(&current);
+
+    let dialog = adw::AlertDialog::new(
+        Some("Remove app lock"),
+        Some("Enter your current password to turn the lock off."),
+    );
+    dialog.set_extra_child(Some(&list));
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("remove", "Remove");
+    dialog.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
+    dialog.set_close_response("cancel");
+
+    let win = ui.window.clone();
+    let ui = ui.clone();
+    dialog.connect_response(None, move |_, resp| {
+        if resp != "remove" {
+            return;
+        }
+        if esp_core::verify_lock(&current.text()) {
+            match esp_core::clear_lock() {
+                Ok(()) => ui.toast("App lock removed."),
+                Err(e) => ui.toast(&format!("Could not remove the lock: {e}")),
+            }
+        } else {
+            ui.toast("Incorrect password.");
+        }
+    });
+    dialog.present(Some(&win));
 }
 
 /// After an import, tell the user which remotes they still need to reconnect here.
