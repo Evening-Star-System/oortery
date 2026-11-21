@@ -26,7 +26,7 @@ pub use engine::{
     activity, list_dirs, list_mounts, mount, rc_at, unmount, Activity, DirEntry, JobStats,
     JobStatus, Mount, Rcd, Transfer,
 };
-pub use jobs::{load_jobs, save_jobs, slug_id, Endpoint, Job, SyncMode};
+pub use jobs::{load_jobs, now_unix, save_jobs, slug_id, Endpoint, Job, Schedule, SyncMode};
 pub use preflight::{scan_dir, Hazard, Issue};
 pub use settings::{load_window_state, save_window_state, WindowState};
 pub use stall::{StallTracker, DEFAULT_STALL_SECS};

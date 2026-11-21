@@ -6,7 +6,7 @@
 //! TODO: move it to the OS keyring (secret-service) before real use; a plaintext file is an
 //! alpha stopgap, not the ethos-correct home for a secret.
 
-use crate::jobs::{config_dir, Endpoint};
+use crate::jobs::{config_dir, Endpoint, Schedule};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Read};
@@ -27,6 +27,12 @@ pub struct BackupJob {
     /// older stored jobs (without the field) loadable.
     #[serde(default)]
     pub excludes: Vec<String>,
+    /// How often to back up on its own.
+    #[serde(default)]
+    pub schedule: Schedule,
+    /// Unix seconds of the last run, for scheduling.
+    #[serde(default)]
+    pub last_run: Option<i64>,
 }
 
 /// One restic snapshot.
@@ -326,6 +332,8 @@ mod tests {
             sources: vec![data.to_string_lossy().into_owned()],
             repo: Endpoint::local(repo.to_string_lossy().into_owned()),
             excludes: Vec::new(),
+            schedule: Schedule::Manual,
+            last_run: None,
         };
         save_password(&job.id, "esp-test-pw").unwrap();
         init_repo(&job).expect("init");
@@ -377,6 +385,8 @@ mod tests {
             sources: vec![],
             repo: Endpoint::local(repo.to_string_lossy().into_owned()),
             excludes: Vec::new(),
+            schedule: Schedule::Manual,
+            last_run: None,
         };
         save_password(&job.id, "pw").unwrap();
         init_repo(&job).expect("init");
@@ -415,6 +425,8 @@ mod tests {
             sources: vec![data.to_string_lossy().into_owned()],
             repo: Endpoint::local(repo.to_string_lossy().into_owned()),
             excludes: Vec::new(),
+            schedule: Schedule::Manual,
+            last_run: None,
         };
         save_password(&job.id, "pw").unwrap();
         init_repo(&job).expect("init");
@@ -462,6 +474,8 @@ mod tests {
             sources: vec![data.to_string_lossy().into_owned()],
             repo: Endpoint::local(repo.to_string_lossy().into_owned()),
             excludes: vec!["node_modules".into()],
+            schedule: Schedule::Manual,
+            last_run: None,
         };
         save_password(&job.id, "pw").unwrap();
         init_repo(&job).expect("init");

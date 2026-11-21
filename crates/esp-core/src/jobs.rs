@@ -8,6 +8,73 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Unix time now, in whole seconds. Used for scheduling (`Schedule::is_due`).
+pub fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// How often a job runs on its own. The interval is measured from the last run, so the app
+/// only needs to be open when a job comes due (true background running, app closed, is a later
+/// addition via a user service).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Schedule {
+    /// Only runs when the user clicks Run. The default.
+    #[default]
+    Manual,
+    Hourly,
+    SixHourly,
+    Daily,
+    Weekly,
+}
+
+impl Schedule {
+    /// All schedules in display order (for building a chooser).
+    pub const ALL: [Schedule; 5] = [
+        Schedule::Manual,
+        Schedule::Hourly,
+        Schedule::SixHourly,
+        Schedule::Daily,
+        Schedule::Weekly,
+    ];
+
+    /// Seconds between automatic runs, or `None` for a manual-only job.
+    pub fn interval_secs(self) -> Option<i64> {
+        match self {
+            Schedule::Manual => None,
+            Schedule::Hourly => Some(3_600),
+            Schedule::SixHourly => Some(6 * 3_600),
+            Schedule::Daily => Some(24 * 3_600),
+            Schedule::Weekly => Some(7 * 24 * 3_600),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Schedule::Manual => "Manual",
+            Schedule::Hourly => "Every hour",
+            Schedule::SixHourly => "Every 6 hours",
+            Schedule::Daily => "Every day",
+            Schedule::Weekly => "Every week",
+        }
+    }
+
+    /// True if a job on this schedule is due to run now, given when it last ran (`None` = never).
+    /// A never-run scheduled job is due immediately; a manual job is never due.
+    pub fn is_due(self, last_run: Option<i64>, now: i64) -> bool {
+        match self.interval_secs() {
+            None => false,
+            Some(interval) => match last_run {
+                None => true,
+                Some(last) => now - last >= interval,
+            },
+        }
+    }
+}
+
 /// How a sync reconciles destination against source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -101,6 +168,12 @@ pub struct Job {
     pub src: Endpoint,
     pub dst: Endpoint,
     pub mode: SyncMode,
+    /// How often to run on its own. `default` keeps older stored jobs loadable.
+    #[serde(default)]
+    pub schedule: Schedule,
+    /// Unix seconds of the last run, for scheduling. `None` until it has run once.
+    #[serde(default)]
+    pub last_run: Option<i64>,
 }
 
 /// Oortery's config directory: `$XDG_CONFIG_HOME/oortery` (or `~/.config/oortery`).
@@ -193,6 +266,8 @@ mod tests {
             src: Endpoint::local("/a"),
             dst: Endpoint::remote("gdrive", "photos"),
             mode: SyncMode::Copy,
+            schedule: Schedule::Manual,
+            last_run: None,
         };
         assert_eq!(slug_id("Home Photos!!", &[]), "home-photos");
         assert_eq!(
@@ -200,6 +275,21 @@ mod tests {
             "home-photos-2"
         );
         assert_eq!(slug_id("   ", &[]), "sync");
+    }
+
+    #[test]
+    fn schedule_due_logic() {
+        // Manual never runs on its own.
+        assert!(!Schedule::Manual.is_due(None, 10_000));
+        assert!(!Schedule::Manual.is_due(Some(0), 10_000_000));
+        // A never-run scheduled job is due immediately.
+        assert!(Schedule::Daily.is_due(None, 10_000));
+        // Not due until the interval elapses, then due.
+        let day = 24 * 3_600;
+        assert!(!Schedule::Daily.is_due(Some(1_000), 1_000 + day - 1));
+        assert!(Schedule::Daily.is_due(Some(1_000), 1_000 + day));
+        assert!(Schedule::Hourly.is_due(Some(1_000), 1_000 + 3_600));
+        assert_eq!(Schedule::Weekly.interval_secs(), Some(7 * 24 * 3_600));
     }
 
     #[test]
@@ -216,6 +306,8 @@ mod tests {
             src: Endpoint::local("/home/me/docs"),
             dst: Endpoint::remote("gdrive", "docs"),
             mode: SyncMode::Mirror,
+            schedule: Schedule::Manual,
+            last_run: None,
         }];
         save_jobs(&jobs).unwrap();
         let back = load_jobs().unwrap();

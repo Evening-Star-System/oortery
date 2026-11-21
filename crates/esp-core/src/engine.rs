@@ -314,7 +314,7 @@ pub fn activity(port: u16) -> Activity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jobs::{Endpoint, Job, SyncMode};
+    use crate::jobs::{Endpoint, Job, Schedule, SyncMode};
 
     #[test]
     fn list_dirs_browses_local_tree() {
@@ -411,6 +411,8 @@ mod tests {
             src: Endpoint::local(src.to_string_lossy().into_owned()),
             dst: Endpoint::local(dst.to_string_lossy().into_owned()),
             mode: SyncMode::Copy,
+            schedule: Schedule::Manual,
+            last_run: None,
         };
         let group = "esp/test-roundtrip";
         let jobid = rcd.start_job(&job, group).expect("start job");

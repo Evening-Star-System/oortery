@@ -200,6 +200,60 @@ fn load_css() {
     }
 }
 
+/// Run scheduled syncs and backups that have come due, while the app is open. Ticks once a
+/// minute; reloads from disk each tick (picking up edits), and writes `last_run` back on a
+/// fresh load so it never clobbers a job the user just added or edited.
+fn start_scheduler(ui: &Rc<Ui>) {
+    let ui = ui.clone();
+    glib::timeout_add_local(std::time::Duration::from_secs(60), move || {
+        let now = esp_core::now_unix();
+
+        let jobs = esp_core::load_jobs().unwrap_or_default();
+        let due: Vec<_> = jobs
+            .iter()
+            .filter(|j| j.schedule.is_due(j.last_run, now))
+            .cloned()
+            .collect();
+        if !due.is_empty() {
+            for j in &due {
+                syncs::run_detached(&ui, j);
+            }
+            let ids: Vec<&str> = due.iter().map(|j| j.id.as_str()).collect();
+            let mut fresh = esp_core::load_jobs().unwrap_or_default();
+            for j in &mut fresh {
+                if ids.contains(&j.id.as_str()) {
+                    j.last_run = Some(now);
+                }
+            }
+            let _ = esp_core::save_jobs(&fresh);
+            syncs::refresh(&ui);
+        }
+
+        let backups = esp_core::load_backups().unwrap_or_default();
+        let bdue: Vec<_> = backups
+            .iter()
+            .filter(|b| b.schedule.is_due(b.last_run, now))
+            .cloned()
+            .collect();
+        if !bdue.is_empty() {
+            for b in &bdue {
+                backups::run_detached(&ui, b);
+            }
+            let ids: Vec<&str> = bdue.iter().map(|b| b.id.as_str()).collect();
+            let mut fresh = esp_core::load_backups().unwrap_or_default();
+            for b in &mut fresh {
+                if ids.contains(&b.id.as_str()) {
+                    b.last_run = Some(now);
+                }
+            }
+            let _ = esp_core::save_backups(&fresh);
+            backups::refresh(&ui);
+        }
+
+        glib::ControlFlow::Continue
+    });
+}
+
 struct PageDef {
     name: &'static str,
     title: &'static str,
@@ -411,6 +465,7 @@ fn build_ui(app: &adw::Application) {
     mounts::refresh(&ui);
     backups::refresh(&ui);
     activity::start_polling(&ui);
+    start_scheduler(&ui);
 
     {
         let (win, pop) = (window.clone(), menu_pop.clone());

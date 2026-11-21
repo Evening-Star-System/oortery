@@ -137,6 +137,15 @@ fn job_row(ui: &Rc<Ui>, job: Job) -> adw::ActionRow {
     }
     row.add_suffix(&badge);
 
+    // A small badge when the sync runs on a schedule.
+    if job.schedule != esp_core::Schedule::Manual {
+        let sb = gtk::Label::new(Some(job.schedule.label()));
+        sb.add_css_class("badge");
+        sb.set_valign(gtk::Align::Center);
+        sb.set_tooltip_text(Some("Runs automatically while Oortery is open."));
+        row.add_suffix(&sb);
+    }
+
     let bar = gtk::ProgressBar::new();
     bar.set_valign(gtk::Align::Center);
     bar.set_width_request(150);
@@ -357,6 +366,57 @@ fn present_preflight(ui: &Rc<Ui>, job: &Job) {
     dialog.present(Some(&ui.window));
 }
 
+/// Run a job from the scheduler, with no row to drive. Starts it on the daemon and reports the
+/// outcome by toast; the Activity page shows live progress. Keeps the active-sync count honest.
+pub(crate) fn run_detached(ui: &Rc<Ui>, job: &Job) {
+    let rcd = match ui.ensure_rcd() {
+        Ok(r) => r,
+        Err(e) => {
+            ui.toast(&format!("Scheduled sync could not start the engine: {e}"));
+            return;
+        }
+    };
+    let seq = ui.run_seq.get() + 1;
+    ui.run_seq.set(seq);
+    let group = format!("oortery/{}/{seq}", job.id);
+    let jobid = match rcd.start_job(job, &group) {
+        Ok(id) => id,
+        Err(e) => {
+            *ui.rcd.borrow_mut() = None;
+            ui.toast(&format!(
+                "Scheduled sync '{}' could not start: {e}",
+                job.name
+            ));
+            return;
+        }
+    };
+    ui.active_syncs.set(ui.active_syncs.get() + 1);
+    ui.refresh_active_count();
+    ui.toast(&format!("Scheduled sync '{}' started", job.name));
+
+    let (ui_p, name) = (ui.clone(), job.name.clone());
+    glib::timeout_add_local(Duration::from_millis(400), move || {
+        let Some(rcd) = ui_p.rcd.borrow().as_ref().cloned() else {
+            return glib::ControlFlow::Break;
+        };
+        match rcd.job_status(jobid) {
+            Ok(st) if st.finished => {
+                let left = ui_p.active_syncs.get().saturating_sub(1);
+                ui_p.active_syncs.set(left);
+                ui_p.refresh_active_count();
+                if st.success {
+                    ui_p.toast(&format!("Scheduled '{name}' finished"));
+                } else {
+                    ui_p.toast(&format!("Scheduled '{name}' failed: {}", st.error));
+                }
+                glib::ControlFlow::Break
+            }
+            Ok(_) => glib::ControlFlow::Continue,
+            Err(_) => glib::ControlFlow::Break,
+        }
+    });
+}
+
 /// The new-/edit-sync dialog: name, a source and destination built from configured remotes or
 /// a local path, and a mode. `edit` prefills it and saves over the same job. Refreshes after.
 pub fn present_new(ui: &Rc<Ui>, edit: Option<Job>) {
@@ -436,6 +496,17 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<Job>) {
     });
     prefs.add(&gmode);
 
+    // When: run on its own, on a schedule (while Oortery is open).
+    let gwhen = adw::PreferencesGroup::builder().title("Schedule").build();
+    let sched_labels: Vec<&str> = esp_core::Schedule::ALL.iter().map(|s| s.label()).collect();
+    let sched_combo = adw::ComboRow::builder()
+        .title("Run automatically")
+        .subtitle("Runs on this cadence while Oortery is open.")
+        .model(&gtk::StringList::new(&sched_labels))
+        .build();
+    gwhen.add(&sched_combo);
+    prefs.add(&gwhen);
+
     // Prefill when editing an existing job.
     if let Some(j) = &edit {
         name_row.set_text(&j.name);
@@ -444,6 +515,7 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<Job>) {
         dst_combo.set_selected(combo_index_for(&options, &j.dst));
         dst_path.set_text(&j.dst.path);
         mode_combo.set_selected(u32::from(j.mode == SyncMode::Mirror));
+        sched_combo.set_selected(sched_index(j.schedule));
     }
 
     let scroll = gtk::ScrolledWindow::new();
@@ -462,6 +534,8 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<Job>) {
     let ui2 = ui.clone();
     let dlg2 = dialog.clone();
     let edit_id = edit.as_ref().map(|j| j.id.clone());
+    // Preserve the last-run time across an edit so changing the schedule does not re-trigger it.
+    let prev_last_run = edit.as_ref().and_then(|j| j.last_run);
     create.connect_clicked(move |_| {
         let name = name_row.text().trim().to_string();
         if name.is_empty() {
@@ -479,6 +553,9 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<Job>) {
         } else {
             SyncMode::Copy
         };
+        let schedule = *esp_core::Schedule::ALL
+            .get(sched_combo.selected() as usize)
+            .unwrap_or(&esp_core::Schedule::Manual);
         let mut jobs = esp_core::load_jobs().unwrap_or_default();
         let id = match &edit_id {
             Some(id) => id.clone(),
@@ -490,6 +567,8 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<Job>) {
             src,
             dst,
             mode,
+            schedule,
+            last_run: prev_last_run,
         };
         match jobs.iter().position(|j| j.id == id) {
             Some(pos) => jobs[pos] = new_job,
@@ -557,6 +636,14 @@ pub(crate) fn wire_browse(
         });
         crate::folder_browser::present(&ui, fs, start, on_pick);
     });
+}
+
+/// The combo index for a schedule (position in `Schedule::ALL`). Shared by both dialogs.
+pub(crate) fn sched_index(s: esp_core::Schedule) -> u32 {
+    esp_core::Schedule::ALL
+        .iter()
+        .position(|&x| x == s)
+        .unwrap_or(0) as u32
 }
 
 /// Build an endpoint from the selected combo option and a path string.

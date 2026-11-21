@@ -116,6 +116,15 @@ fn job_row(ui: &Rc<Ui>, job: BackupJob) -> adw::ActionRow {
         .build();
     row.add_prefix(&gtk::Image::from_icon_name("drive-harddisk-symbolic"));
 
+    // A small badge when the backup runs on a schedule.
+    if job.schedule != esp_core::Schedule::Manual {
+        let sb = gtk::Label::new(Some(job.schedule.label()));
+        sb.add_css_class("badge");
+        sb.set_valign(gtk::Align::Center);
+        sb.set_tooltip_text(Some("Runs automatically while Oortery is open."));
+        row.add_suffix(&sb);
+    }
+
     let bar = gtk::ProgressBar::new();
     bar.set_valign(gtk::Align::Center);
     bar.set_width_request(150);
@@ -224,6 +233,31 @@ fn run_backup(
                     }
                     break;
                 }
+            }
+        }
+    });
+}
+
+/// Run a backup from the scheduler, with no row to drive. Reports the outcome by toast.
+pub(crate) fn run_detached(ui: &Rc<Ui>, job: &BackupJob) {
+    ui.toast(&format!("Scheduled backup '{}' started", job.name));
+    let (tx, rx) = async_channel::unbounded::<Msg>();
+    let job_t = job.clone();
+    std::thread::spawn(move || {
+        let res = esp_core::init_repo(&job_t)
+            .and_then(|()| esp_core::run_backup(&job_t, |_| {}))
+            .map_err(|e| e.to_string());
+        let _ = tx.send_blocking(Msg::Done(res));
+    });
+    let (ui_p, name) = (ui.clone(), job.name.clone());
+    glib::spawn_future_local(async move {
+        while let Ok(msg) = rx.recv().await {
+            if let Msg::Done(res) = msg {
+                match res {
+                    Ok(_) => ui_p.toast(&format!("Scheduled '{name}' backed up")),
+                    Err(e) => ui_p.toast(&format!("Scheduled '{name}' backup failed: {e}")),
+                }
+                break;
             }
         }
     });
@@ -404,6 +438,17 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
     gpw.add(&pw_row);
     prefs.add(&gpw);
 
+    // When: back up on its own, on a schedule (while Oortery is open).
+    let gwhen = adw::PreferencesGroup::builder().title("Schedule").build();
+    let sched_labels: Vec<&str> = esp_core::Schedule::ALL.iter().map(|s| s.label()).collect();
+    let sched_combo = adw::ComboRow::builder()
+        .title("Back up automatically")
+        .subtitle("Runs on this cadence while Oortery is open.")
+        .model(&gtk::StringList::new(&sched_labels))
+        .build();
+    gwhen.add(&sched_combo);
+    prefs.add(&gwhen);
+
     // Prefill when editing an existing backup (the password stays in its file, not shown).
     if let Some(j) = &edit {
         name_row.set_text(&j.name);
@@ -411,6 +456,7 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
         repo_combo.set_selected(syncs::combo_index_for(&options, &j.repo));
         repo_path.set_text(&j.repo.path);
         excl_row.set_text(&j.excludes.join(", "));
+        sched_combo.set_selected(syncs::sched_index(j.schedule));
         pw_row.set_title("Password (leave blank to keep the current one)");
     }
 
@@ -429,6 +475,7 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
     let ui2 = ui.clone();
     let dlg2 = dialog.clone();
     let edit_id = edit.as_ref().map(|j| j.id.clone());
+    let prev_last_run = edit.as_ref().and_then(|j| j.last_run);
     create.connect_clicked(move |_| {
         let name = name_row.text().trim().to_string();
         if name.is_empty() {
@@ -478,12 +525,17 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
+        let schedule = *esp_core::Schedule::ALL
+            .get(sched_combo.selected() as usize)
+            .unwrap_or(&esp_core::Schedule::Manual);
         let new_job = BackupJob {
             id: id.clone(),
             name: name.clone(),
             sources: vec![source],
             repo,
             excludes,
+            schedule,
+            last_run: prev_last_run,
         };
         match jobs.iter().position(|j| j.id == id) {
             Some(pos) => jobs[pos] = new_job,

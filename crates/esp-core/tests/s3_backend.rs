@@ -78,6 +78,8 @@ fn s3_sync_and_backup_roundtrip() {
         src: Endpoint::local(src.to_string_lossy().into_owned()),
         dst: Endpoint::remote("s3it", format!("{prefix}/sync")),
         mode: SyncMode::Copy,
+        schedule: esp_core::Schedule::Manual,
+        last_run: None,
     };
     run_sync(&rcd, &up, "it/s3-up");
 
@@ -90,6 +92,8 @@ fn s3_sync_and_backup_roundtrip() {
         src: Endpoint::remote("s3it", format!("{prefix}/sync")),
         dst: Endpoint::local(down.to_string_lossy().into_owned()),
         mode: SyncMode::Copy,
+        schedule: esp_core::Schedule::Manual,
+        last_run: None,
     };
     run_sync(&rcd, &dn, "it/s3-down");
     assert_eq!(
@@ -130,6 +134,8 @@ fn s3_sync_and_backup_roundtrip() {
             sources: vec![src.to_string_lossy().into_owned()],
             repo: Endpoint::remote("s3it", format!("{prefix}/restic")),
             excludes: Vec::new(),
+            schedule: esp_core::Schedule::Manual,
+            last_run: None,
         };
         esp_core::save_password(&bjob.id, "it-pw").expect("save pw");
         init_repo(&bjob).expect("init restic repo on S3");
