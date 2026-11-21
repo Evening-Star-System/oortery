@@ -131,6 +131,16 @@ fn job_row(ui: &Rc<Ui>, job: BackupJob) -> adw::ActionRow {
     bar.set_visible(false);
     row.add_suffix(&bar);
 
+    // Verify integrity: the research's #1 trust signal. A deliberate action (not auto-run on a
+    // slow cloud), it runs restic check off-thread and reports whether the backup is restorable.
+    let verify = gtk::Button::from_icon_name("security-high-symbolic");
+    verify.set_tooltip_text(Some("Verify this backup is intact"));
+    verify.set_valign(gtk::Align::Center);
+    verify.add_css_class("flat");
+    row.add_suffix(&verify);
+    let (ui_v, job_v) = (ui.clone(), job.clone());
+    verify.connect_clicked(move |_| verify_backup(&ui_v, &job_v));
+
     let snaps = gtk::Button::from_icon_name("document-open-recent-symbolic");
     snaps.set_tooltip_text(Some("Snapshots and restore"));
     snaps.set_valign(gtk::Align::Center);
@@ -233,6 +243,29 @@ fn run_backup(
                     }
                     break;
                 }
+            }
+        }
+    });
+}
+
+/// Check a backup's repository integrity off the UI thread (restic check), reporting whether
+/// the backup is intact and restorable. This is the peace-of-mind signal: a backup you have
+/// not verified is, as the research puts it, no better than no backup.
+fn verify_backup(ui: &Rc<Ui>, job: &BackupJob) {
+    ui.toast(&format!("Verifying \u{201c}{}\u{201d}\u{2026}", job.name));
+    let (tx, rx) = async_channel::bounded(1);
+    let job_t = job.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send_blocking(esp_core::check_repo(&job_t).map_err(|e| e.to_string()));
+    });
+    let (ui_p, name) = (ui.clone(), job.name.clone());
+    glib::spawn_future_local(async move {
+        if let Ok(res) = rx.recv().await {
+            match res {
+                Ok(()) => ui_p.toast(&format!("\u{201c}{name}\u{201d} is intact and restorable")),
+                Err(e) => ui_p.toast(&format!(
+                    "\u{201c}{name}\u{201d} integrity check FAILED: {e}"
+                )),
             }
         }
     });
