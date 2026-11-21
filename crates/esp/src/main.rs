@@ -4,6 +4,7 @@
 //! constellation, a Remotes page from the real rclone config, and an add-remote flow
 //! that spans every backend rclone can reach.
 
+mod about;
 mod activity;
 mod add_remote;
 mod backups;
@@ -258,6 +259,25 @@ fn build_ui(app: &adw::Application) {
     content_header.pack_start(&add_btn);
     let title = adw::WindowTitle::new("Overview", "");
     content_header.set_title_widget(Some(&title));
+
+    // Primary menu: the way to About (and the door into Evening Star).
+    let menu_btn = gtk::MenuButton::builder()
+        .icon_name("open-menu-symbolic")
+        .tooltip_text("Menu")
+        .build();
+    let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    menu_box.set_margin_top(4);
+    menu_box.set_margin_bottom(4);
+    menu_box.set_margin_start(4);
+    menu_box.set_margin_end(4);
+    let about_item = gtk::Button::with_label("About Oortery");
+    about_item.add_css_class("flat");
+    about_item.set_halign(gtk::Align::Fill);
+    menu_box.append(&about_item);
+    let menu_pop = gtk::Popover::new();
+    menu_pop.set_child(Some(&menu_box));
+    menu_btn.set_popover(Some(&menu_pop));
+    content_header.pack_end(&menu_btn);
     let title_for_notify = title.clone();
     stack.connect_visible_child_notify(move |s| {
         if let Some(name) = s.visible_child_name() {
@@ -318,6 +338,14 @@ fn build_ui(app: &adw::Application) {
     backups::refresh(&ui);
     activity::start_polling(&ui);
 
+    {
+        let (win, pop) = (window.clone(), menu_pop.clone());
+        about_item.connect_clicked(move |_| {
+            pop.popdown();
+            about::present(&win);
+        });
+    }
+
     let ui_for_add = ui.clone();
     add_btn.connect_clicked(move |_| add_remote::present(&ui_for_add));
     let ui_for_new_sync = ui.clone();
@@ -338,6 +366,10 @@ fn build_ui(app: &adw::Application) {
     // Headless aid: auto-open the folder browser at ESP_BROWSE (a local subpath) for screenshots.
     if let Ok(start) = std::env::var("ESP_BROWSE") {
         folder_browser::present(&ui, "/".to_string(), start, std::rc::Rc::new(|_| {}));
+    }
+    // Headless aid: auto-open the About dialog for screenshots.
+    if std::env::var("ESP_ABOUT").is_ok() {
+        about::present(&window);
     }
     // Headless aid: auto-open the new-backup dialog for screenshots.
     if std::env::var("ESP_BACKUP_DIALOG").is_ok() {
