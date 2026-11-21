@@ -125,9 +125,87 @@ pub fn init_repo(job: &BackupJob) -> Result<()> {
     bail!("restic init failed: {}", err.trim());
 }
 
-/// Back up the job's sources into a new snapshot, streaming percent-done (0.0..1.0) to
-/// `on_progress`. Returns the new snapshot id. Run this off the UI thread.
-pub fn run_backup<F: FnMut(f64)>(job: &BackupJob, mut on_progress: F) -> Result<String> {
+/// Remove stale locks from the repo (restic only removes locks whose owning process is
+/// gone or long expired, so this is safe to call even if another backup is running). This
+/// is the recovery for the documented "repository is already locked" wedge: a backend 429
+/// or an interrupted run can leave a lock that blocks every future backup.
+pub fn unlock_repo(job: &BackupJob) -> Result<()> {
+    let out = restic_cmd(job)?
+        .arg("unlock")
+        .output()
+        .context("running restic unlock")?;
+    if !out.status.success() {
+        bail!(
+            "restic unlock failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Structural integrity check: verifies the repo's index, trees, and that every referenced
+/// pack blob exists. Catches the restic-over-rclone corruption class (a snapshot pointing at
+/// a missing or partially-uploaded pack) that would otherwise surface only at restore time.
+/// Does not download file data, so it is bounded by metadata size, not repo size.
+pub fn check_repo(job: &BackupJob) -> Result<()> {
+    let out = restic_cmd(job)?
+        .arg("check")
+        .output()
+        .context("running restic check")?;
+    if !out.status.success() {
+        // restic writes its findings to both streams; surface whatever is there.
+        let err = String::from_utf8_lossy(&out.stderr);
+        let msg = if err.trim().is_empty() {
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        } else {
+            err.trim().to_string()
+        };
+        bail!("repository integrity check failed: {msg}");
+    }
+    Ok(())
+}
+
+/// True if a restic error reads as a lock contention we can try to clear.
+fn is_lock_error(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    m.contains("already locked") || m.contains("unable to create lock")
+}
+
+/// Where a running backup is in its lifecycle. The UI shows this verbatim because the point
+/// of ESP is honest state: "verifying" is a real phase, not padding at 100%.
+#[derive(Clone, Copy, Debug)]
+pub enum BackupPhase {
+    /// Uploading data; fraction done in 0.0..1.0.
+    Backing(f64),
+    /// Data written; verifying repository integrity before the backup counts as done.
+    Verifying,
+}
+
+/// Back up the job's sources into a new snapshot, reporting lifecycle phases to `on`.
+/// Returns the new snapshot id. Run this off the UI thread.
+///
+/// Reliability, per the research checklist: if the repo is wedged by a stale lock we clear
+/// it once and retry (P0 #5), and we never return success until a structural integrity check
+/// passes (P0 #3) so a partial/corrupt upload can never masquerade as a good backup.
+pub fn run_backup<F: FnMut(BackupPhase)>(job: &BackupJob, mut on: F) -> Result<String> {
+    let snapshot = match backup_once(job, &mut on) {
+        Ok(id) => id,
+        Err(e) if is_lock_error(&e.to_string()) => {
+            // Stale lock: clear it and try exactly once more.
+            unlock_repo(job).context("clearing a stale repository lock")?;
+            backup_once(job, &mut on)?
+        }
+        Err(e) => return Err(e),
+    };
+    // Integrity gate: a backup is not "done" until the repository verifies.
+    on(BackupPhase::Verifying);
+    check_repo(job).context("verifying the backup after it was written")?;
+    Ok(snapshot)
+}
+
+/// One restic backup attempt. Reports `Backing` progress; does not verify or recover (see
+/// `run_backup`).
+fn backup_once<F: FnMut(BackupPhase)>(job: &BackupJob, on: &mut F) -> Result<String> {
     let mut child = restic_cmd(job)?
         .arg("backup")
         .args(&job.sources)
@@ -155,7 +233,7 @@ pub fn run_backup<F: FnMut(f64)>(job: &BackupJob, mut on_progress: F) -> Result<
         match v.get("message_type").and_then(|m| m.as_str()) {
             Some("status") => {
                 if let Some(p) = v.get("percent_done").and_then(|x| x.as_f64()) {
-                    on_progress(p);
+                    on(BackupPhase::Backing(p));
                 }
             }
             Some("summary") => {
@@ -170,9 +248,9 @@ pub fn run_backup<F: FnMut(f64)>(job: &BackupJob, mut on_progress: F) -> Result<
     let status = child.wait().context("waiting for restic")?;
     let err = err_thread.join().unwrap_or_default();
     if !status.success() {
+        // Keep restic's own wording in the message so run_backup can spot a lock error.
         bail!("restic backup failed: {}", err.trim());
     }
-    on_progress(1.0);
     Ok(snapshot)
 }
 
@@ -218,6 +296,9 @@ mod tests {
             eprintln!("restic not installed; skipping");
             return;
         }
+        let _env = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let base = std::env::temp_dir().join(format!("esp-backup-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", base.join("cfg"));
         let data = base.join("data");
@@ -238,7 +319,7 @@ mod tests {
         init_repo(&job).expect("init");
 
         let mut seen_progress = false;
-        let snap = run_backup(&job, |_p| seen_progress = true).expect("backup");
+        let snap = run_backup(&job, |_phase| seen_progress = true).expect("backup");
         assert!(!snap.is_empty(), "no snapshot id returned");
 
         let snaps = list_snapshots(&job).expect("snapshots");
@@ -252,6 +333,91 @@ mod tests {
             .any(|p| p.ends_with("a.txt"));
         assert!(found, "restored tree missing a.txt");
         let _ = seen_progress; // progress is best-effort; a tiny backup may finish in one status
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn lock_error_classification() {
+        assert!(is_lock_error(
+            "Fatal: repository is already locked by PID 1"
+        ));
+        assert!(is_lock_error("unable to create lock in backend"));
+        assert!(!is_lock_error("restic backup failed: connection refused"));
+    }
+
+    #[test]
+    fn unlock_is_safe_on_clean_repo() {
+        if restic_path().is_none() {
+            eprintln!("restic not installed; skipping");
+            return;
+        }
+        let _env = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("esp-unlock-{}", std::process::id()));
+        std::env::set_var("XDG_CONFIG_HOME", base.join("cfg"));
+        let repo = base.join("repo");
+        let job = BackupJob {
+            id: "unlock".into(),
+            name: "Unlock".into(),
+            sources: vec![],
+            repo: Endpoint::local(repo.to_string_lossy().into_owned()),
+        };
+        save_password(&job.id, "pw").unwrap();
+        init_repo(&job).expect("init");
+        // No locks held: unlock is a safe no-op, and check passes on a fresh repo.
+        unlock_repo(&job).expect("unlock clean repo");
+        check_repo(&job).expect("check clean repo");
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn check_detects_a_missing_pack() {
+        if restic_path().is_none() {
+            eprintln!("restic not installed; skipping");
+            return;
+        }
+        let _env = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("esp-check-{}", std::process::id()));
+        std::env::set_var("XDG_CONFIG_HOME", base.join("cfg"));
+        let data = base.join("data");
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&data).unwrap();
+        // Enough unique bytes to make at least one data pack.
+        for i in 0..64 {
+            std::fs::write(
+                data.join(format!("f{i}.bin")),
+                format!("payload-{i}").repeat(512),
+            )
+            .unwrap();
+        }
+        let job = BackupJob {
+            id: "check".into(),
+            name: "Check".into(),
+            sources: vec![data.to_string_lossy().into_owned()],
+            repo: Endpoint::local(repo.to_string_lossy().into_owned()),
+        };
+        save_password(&job.id, "pw").unwrap();
+        init_repo(&job).expect("init");
+        // A good backup must pass its own integrity gate.
+        run_backup(&job, |_phase| {}).expect("backup + verify");
+
+        // Now simulate the restic-over-rclone corruption class: a referenced pack never
+        // finished uploading. Delete one data pack and prove check_repo catches it.
+        let packs: Vec<PathBuf> = walk(repo.join("data"));
+        let victim = packs.first().expect("repo should have data packs").clone();
+        std::fs::remove_file(&victim).expect("remove a pack");
+        let err = check_repo(&job).expect_err("check must fail on a missing pack");
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("integrity check failed"),
+            "unexpected error: {msg}"
+        );
 
         std::env::remove_var("XDG_CONFIG_HOME");
         let _ = std::fs::remove_dir_all(&base);

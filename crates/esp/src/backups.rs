@@ -11,6 +11,7 @@ use std::rc::Rc;
 /// Messages from a running backup worker thread.
 enum Msg {
     Progress(f64),
+    Verifying,
     Done(Result<String, String>),
 }
 
@@ -188,8 +189,11 @@ fn run_backup(
     std::thread::spawn(move || {
         let txp = tx.clone();
         let res = esp_core::init_repo(&job_t).and_then(|()| {
-            esp_core::run_backup(&job_t, |p| {
-                let _ = txp.send_blocking(Msg::Progress(p));
+            esp_core::run_backup(&job_t, |phase| {
+                let _ = txp.send_blocking(match phase {
+                    esp_core::BackupPhase::Backing(p) => Msg::Progress(p),
+                    esp_core::BackupPhase::Verifying => Msg::Verifying,
+                });
             })
         });
         let _ = tx.send_blocking(Msg::Done(res.map_err(|e| e.to_string())));
@@ -202,6 +206,12 @@ fn run_backup(
         while let Ok(msg) = rx.recv().await {
             match msg {
                 Msg::Progress(p) => bar_p.set_fraction(p),
+                Msg::Verifying => {
+                    // Honest state: the backup is written but not yet trustworthy. Show the
+                    // integrity step rather than a premature 100%.
+                    bar_p.set_fraction(1.0);
+                    row_p.set_subtitle("Verifying integrity...");
+                }
                 Msg::Done(res) => {
                     run_p.set_sensitive(true);
                     bar_p.set_visible(false);

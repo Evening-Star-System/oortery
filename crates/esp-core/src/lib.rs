@@ -16,8 +16,8 @@ pub mod jobs;
 pub mod tuning;
 
 pub use backups::{
-    init_repo, list_snapshots, load_backups, password_file, restic_path, restore, run_backup,
-    save_backups, save_password, BackupJob, Snapshot,
+    check_repo, init_repo, list_snapshots, load_backups, password_file, restic_path, restore,
+    run_backup, save_backups, save_password, unlock_repo, BackupJob, BackupPhase, Snapshot,
 };
 pub use engine::{
     activity, list_dirs, list_mounts, mount, rc_at, unmount, Activity, DirEntry, JobStats,
@@ -25,6 +25,12 @@ pub use engine::{
 };
 pub use jobs::{load_jobs, save_jobs, slug_id, Endpoint, Job, SyncMode};
 pub use tuning::{backend_of, tuning_for, Tuning};
+
+/// Serializes tests that mutate process-global env (XDG_CONFIG_HOME, RCLONE_CONFIG). Cargo
+/// runs tests in parallel threads of one process, so without this two tests can read each
+/// other's config dir. Poison-tolerant: a panicking test must not wedge the rest.
+#[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// A storage backend the user has configured (one entry in rclone's config).
 #[derive(Clone, Debug)]
@@ -240,6 +246,7 @@ mod tests {
         if rclone_path().is_none() {
             return;
         }
+        let _env = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("esp-core-rt-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::env::set_var("RCLONE_CONFIG", dir.join("rclone.conf"));

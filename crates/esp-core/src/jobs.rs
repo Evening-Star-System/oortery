@@ -204,6 +204,9 @@ mod tests {
 
     #[test]
     fn jobs_roundtrip_through_disk() {
+        let _env = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("esp-jobs-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", &dir);
         assert!(load_jobs().unwrap().is_empty());
