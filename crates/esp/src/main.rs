@@ -141,20 +141,54 @@ fn load_css() {
     let provider = gtk::CssProvider::new();
     provider.load_from_string(
         "
-        @define-color accent_color #b9c0ff;
-        @define-color accent_bg_color #5d5fef;
-        .stat-card { padding: 18px 22px; min-width: 150px; border-radius: 14px;
-                     background: alpha(#ffffff, 0.04); border: 1px solid alpha(#ffffff, 0.07); }
+        /* Evening Star palette: periwinkle for text accents, violet for actions. */
+        @define-color accent_color #b4baff;
+        @define-color accent_bg_color #6d5cf0;
+        @define-color accent_fg_color #ffffff;
+
+        /* The whole app sits in a night sky: a deep indigo-violet base with a soft glow
+           bleeding down from the top, so every page feels celestial, not just the hero. */
+        window {
+          background-color: #0d0b1a;
+          background-image: radial-gradient(900px 520px at 50% -8%, alpha(#312a66, 0.70), transparent 72%),
+                            radial-gradient(1100px 560px at 50% 112%, alpha(#2a1f4d, 0.45), transparent 70%);
+        }
+        .navigation-sidebar { background: alpha(#0a0916, 0.55); }
+        headerbar { background: alpha(#0c0a18, 0.72); box-shadow: none; }
+
+        .hero { border-radius: 18px; }
+        .dim { opacity: 0.6; }
+
+        /* Stat cards: a faint top-lit glass panel with a periwinkle edge. */
+        .stat-card { padding: 18px 22px; min-width: 150px; border-radius: 16px;
+                     background: linear-gradient(to bottom, alpha(#ffffff, 0.06), alpha(#8a7cf0, 0.03));
+                     border: 1px solid alpha(@accent_color, 0.12); }
         .stat-number { font-size: 2.3rem; font-weight: 800; }
         .stat-caption { opacity: 0.55; font-size: 0.82rem; letter-spacing: 0.04em; }
         .stat-accent { color: @accent_color; }
-        .hero { border-radius: 18px; }
-        .dim { opacity: 0.6; }
-        row.nav:selected { background: alpha(@accent_color, 0.14); }
+
+        /* Selected nav reads as a soft periwinkle pill. */
+        row.nav { border-radius: 10px; margin: 1px 6px; }
+        row.nav:selected { background: alpha(@accent_color, 0.16); color: #ffffff; }
+
+        /* Primary actions glow like the evening star. */
+        button.suggested-action {
+          background: linear-gradient(to bottom, #7d6ef7, #5d4fe0);
+          color: #ffffff; border: none;
+          box-shadow: 0 1px 10px alpha(#6d5cf0, 0.45);
+        }
+        button.suggested-action:hover {
+          background: linear-gradient(to bottom, #8a7cff, #6a5ce8);
+          box-shadow: 0 1px 14px alpha(#7d6ef7, 0.60);
+        }
+
         .badge { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.03em;
                  padding: 2px 9px; border-radius: 9px; background: alpha(@accent_color, 0.16);
                  color: @accent_color; }
         .badge.danger { background: alpha(@destructive_color, 0.18); color: @destructive_color; }
+
+        /* Boxed lists as faint glass so content floats on the sky. */
+        .boxed-list { background: alpha(#ffffff, 0.03); border: 1px solid alpha(@accent_color, 0.08); }
         ",
     );
     if let Some(display) = gdk::Display::default() {
