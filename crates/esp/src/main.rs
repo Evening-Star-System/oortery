@@ -44,6 +44,8 @@ pub struct Ui {
     pub health_sub: gtk::Label,
     pub last_backup_label: gtk::Label,
     pub coverage_label: gtk::Label,
+    pub overview_onboarding: gtk::Box,
+    pub overview_tiles: gtk::Box,
     /// The operations daemon, started lazily the first time a job runs.
     pub rcd: RefCell<Option<Rc<esp_core::Rcd>>>,
     /// Number of jobs currently running (drives the Overview stat).
@@ -124,6 +126,11 @@ pub fn update_overview(ui: &Rc<Ui>) {
     ui.health_banner.add_css_class(class);
     ui.health_icon.set_icon_name(Some(icon));
     ui.health_text.set_text(&s.headline);
+
+    // First run shows the welcome launcher; once set up, the actionable tiles.
+    let first = s.health == esp_core::Health::FirstRun;
+    ui.overview_onboarding.set_visible(first);
+    ui.overview_tiles.set_visible(!first);
 
     // Secondary line: freshness when we have it, else gentle guidance.
     let sub = match s.newest_backup_age {
@@ -523,6 +530,8 @@ fn build_ui(app: &adw::Application) {
         health_sub: ov.health_sub,
         last_backup_label: ov.last_backup,
         coverage_label: ov.coverage,
+        overview_onboarding: ov.onboarding,
+        overview_tiles: ov.tiles,
         rcd: RefCell::new(None),
         active_syncs: Rc::new(Cell::new(0)),
         run_seq: Cell::new(0),
@@ -570,6 +579,13 @@ fn build_ui(app: &adw::Application) {
     new_sync_btn.connect_clicked(move |_| syncs::present_new(&ui_for_new_sync, None));
     let ui_for_new_backup = ui.clone();
     new_backup_btn.connect_clicked(move |_| backups::present_new(&ui_for_new_backup, None));
+    // First-run launcher buttons.
+    let ui_connect = ui.clone();
+    ov.connect_btn
+        .connect_clicked(move |_| add_remote::present(&ui_connect));
+    let ui_protect = ui.clone();
+    ov.protect_btn
+        .connect_clicked(move |_| backups::present_new(&ui_protect, None));
 
     window.present();
 
@@ -610,6 +626,10 @@ struct OverviewWidgets {
     coverage: gtk::Label,
     remotes: gtk::Label,
     active: gtk::Label,
+    onboarding: gtk::Box,
+    tiles: gtk::Box,
+    connect_btn: gtk::Button,
+    protect_btn: gtk::Button,
 }
 
 fn overview_page(node_count: &Rc<Cell<usize>>) -> OverviewWidgets {
@@ -665,6 +685,33 @@ fn overview_page(node_count: &Rc<Cell<usize>>) -> OverviewWidgets {
     });
     col.append(&hero);
 
+    // First-run: a welcoming two-step launcher instead of empty tiles. Shown only when nothing
+    // is set up yet (toggled in update_overview).
+    let onboarding = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    onboarding.add_css_class("stat-card");
+    onboarding.set_visible(false);
+    let ob_title = gtk::Label::new(Some("Welcome to Oortery"));
+    ob_title.add_css_class("title-3");
+    ob_title.set_xalign(0.0);
+    let ob_sub = gtk::Label::new(Some(
+        "Protect your data in two steps: connect a place, then back up a folder.",
+    ));
+    ob_sub.add_css_class("dim");
+    ob_sub.set_xalign(0.0);
+    ob_sub.set_margin_bottom(6);
+    let ob_steps = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let connect_btn = gtk::Button::with_label("Connect a cloud");
+    connect_btn.add_css_class("suggested-action");
+    connect_btn.add_css_class("pill");
+    let protect_btn = gtk::Button::with_label("Back up a folder");
+    protect_btn.add_css_class("pill");
+    ob_steps.append(&connect_btn);
+    ob_steps.append(&protect_btn);
+    onboarding.append(&ob_title);
+    onboarding.append(&ob_sub);
+    onboarding.append(&ob_steps);
+    col.append(&onboarding);
+
     // Actionable tiles: freshness, coverage, remotes, and live activity. No vanity counters.
     let tiles = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     tiles.set_homogeneous(true);
@@ -690,6 +737,10 @@ fn overview_page(node_count: &Rc<Cell<usize>>) -> OverviewWidgets {
         coverage,
         remotes,
         active,
+        onboarding,
+        tiles,
+        connect_btn,
+        protect_btn,
     }
 }
 
