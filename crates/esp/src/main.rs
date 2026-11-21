@@ -33,6 +33,7 @@ pub struct Ui {
     pub activity_list: gtk::ListBox,
     pub activity_speed: gtk::Label,
     pub active_label: gtk::Label,
+    pub backups_count: gtk::Label,
     /// The operations daemon, started lazily the first time a job runs.
     pub rcd: RefCell<Option<Rc<esp_core::Rcd>>>,
     /// Number of jobs currently running (drives the Overview stat).
@@ -184,7 +185,8 @@ fn build_ui(app: &adw::Application) {
     let node_count = Rc::new(Cell::new(6usize));
 
     let stack = adw::ViewStack::new();
-    let (overview, remotes_count, active_label) = overview_page(provider_count, &node_count);
+    let (overview, remotes_count, active_label, backups_count) =
+        overview_page(provider_count, &node_count);
     let (remotes_widget, remotes_list) = remotes_page();
     let (syncs_widget, syncs_list, new_sync_btn) = syncs::page();
     let (mounts_widget, mounts_list) = mounts::page();
@@ -305,6 +307,7 @@ fn build_ui(app: &adw::Application) {
         activity_list,
         activity_speed,
         active_label,
+        backups_count,
         rcd: RefCell::new(None),
         active_syncs: Rc::new(Cell::new(0)),
         run_seq: Cell::new(0),
@@ -345,7 +348,7 @@ fn build_ui(app: &adw::Application) {
 fn overview_page(
     providers: usize,
     node_count: &Rc<Cell<usize>>,
-) -> (gtk::Widget, gtk::Label, gtk::Label) {
+) -> (gtk::Widget, gtk::Label, gtk::Label, gtk::Label) {
     let clamp = adw::Clamp::new();
     clamp.set_maximum_size(1000);
     let scroll = gtk::ScrolledWindow::new();
@@ -385,12 +388,13 @@ fn overview_page(
     stats.append(&stat_card(&format!("{providers}"), "PROVIDERS READY", false).0);
     let (active_card, active_label) = stat_card("0", "ACTIVE SYNCS", false);
     stats.append(&active_card);
-    stats.append(&stat_card("0", "BACKUPS", false).0);
+    let (backups_card, backups_count) = stat_card("0", "BACKUPS", false);
+    stats.append(&backups_card);
     col.append(&stats);
 
     scroll.set_child(Some(&col));
     clamp.set_child(Some(&scroll));
-    (clamp.upcast(), remotes_count, active_label)
+    (clamp.upcast(), remotes_count, active_label, backups_count)
 }
 
 fn stat_card(number: &str, caption: &str, accent: bool) -> (gtk::Widget, gtk::Label) {
