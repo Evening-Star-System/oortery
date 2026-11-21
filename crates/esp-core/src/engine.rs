@@ -12,6 +12,24 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::jobs::Job;
+use std::sync::OnceLock;
+
+/// The rc daemon is authenticated so another local user cannot drive it (it can read every
+/// remote's stored OAuth token and delete data). The username is fixed; the password is a
+/// per-session random secret. Both are passed to rclone via the child process ENVIRONMENT,
+/// never argv, so the secret never appears in world-readable `/proc/<pid>/cmdline`.
+const RC_USER: &str = "oortery";
+static RC_SECRET: OnceLock<String> = OnceLock::new();
+
+/// The session rc password: generated once on first use and reused for the daemon and every
+/// client call (so it stays valid across a daemon respawn).
+fn rc_secret() -> &'static str {
+    RC_SECRET.get_or_init(|| {
+        let mut buf = [0u8; 24];
+        getrandom::getrandom(&mut buf).expect("getrandom for the rc session secret");
+        buf.iter().map(|b| format!("{b:02x}")).collect()
+    })
+}
 
 /// A running `rclone rcd` the app talks to over loopback. Killed on drop.
 pub struct Rcd {
@@ -25,7 +43,9 @@ impl Rcd {
         let port = free_loopback_port().context("finding a free loopback port for rcd")?;
         let addr = format!("127.0.0.1:{port}");
         let mut cmd = Command::new("rclone");
-        cmd.args(["rcd", "--rc-addr", &addr, "--rc-no-auth"])
+        cmd.args(["rcd", "--rc-addr", &addr])
+            .env("RCLONE_RC_USER", RC_USER)
+            .env("RCLONE_RC_PASS", rc_secret())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         // Drop is our graceful shutdown, but it does not run if the app dies by signal or
@@ -176,6 +196,8 @@ pub fn rc_at(port: u16, command: &str, params: serde_json::Value) -> Result<serd
     let url = format!("http://127.0.0.1:{port}/");
     let out = Command::new("rclone")
         .args(["rc", "--url", &url, "--json", &params.to_string(), command])
+        .env("RCLONE_RC_USER", RC_USER)
+        .env("RCLONE_RC_PASS", rc_secret())
         .output()
         .with_context(|| format!("failed to run `rclone rc {command}`"))?;
     if !out.status.success() {
@@ -318,6 +340,34 @@ pub fn activity(port: u16) -> Activity {
 mod tests {
     use super::*;
     use crate::jobs::{Endpoint, Job, Schedule, SyncMode};
+
+    #[test]
+    fn daemon_requires_auth() {
+        if crate::rclone_path().is_none() {
+            eprintln!("rclone not installed; skipping");
+            return;
+        }
+        let rcd = Rcd::start().expect("start rcd");
+        // The engine's own calls carry the session credential and work.
+        assert!(rcd.rc("rc/noop", serde_json::json!({})).is_ok());
+        // A bare client with NO credential is rejected: the hole --rc-no-auth left open is closed.
+        let url = format!("http://127.0.0.1:{}/", rcd.port());
+        let out = Command::new("rclone")
+            .args(["rc", "--url", &url, "rc/noop"])
+            .env_remove("RCLONE_RC_USER")
+            .env_remove("RCLONE_RC_PASS")
+            .output()
+            .expect("run rclone rc");
+        assert!(
+            !out.status.success(),
+            "an unauthenticated rc call must be rejected"
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("401") || err.contains("Unauthorized"),
+            "expected a 401, got: {err}"
+        );
+    }
 
     #[test]
     fn list_dirs_browses_local_tree() {
