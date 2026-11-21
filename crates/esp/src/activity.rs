@@ -4,11 +4,12 @@
 
 use crate::{syncs, Ui};
 use adw::prelude::*;
+use esp_core::StallTracker;
 use gtk::glib;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Build the Activity page. Returns the page, the total-throughput label, and the list.
 pub fn page() -> (gtk::Widget, gtk::Label, gtk::ListBox) {
@@ -59,12 +60,20 @@ pub fn start_polling(ui: &Rc<Ui>) {
     let rows: Rc<RefCell<HashMap<String, (adw::ActionRow, gtk::ProgressBar)>>> =
         Rc::new(RefCell::new(HashMap::new()));
     let placeholder: Rc<RefCell<Option<adw::ActionRow>>> = Rc::new(RefCell::new(None));
+    // Detect transfers frozen at 0 B/s so a silent hang is visible, not mistaken for slow.
+    let stalls = Rc::new(RefCell::new(StallTracker::new(
+        esp_core::DEFAULT_STALL_SECS,
+    )));
+    let started = Instant::now();
     let ui = ui.clone();
 
     glib::timeout_add_local(Duration::from_millis(600), move || {
         // Read the port, drop the borrow, then query (a short subprocess) without holding it.
         let port = ui.rcd.borrow().as_ref().map(|r| r.port());
         let act = port.map(esp_core::activity).unwrap_or_default();
+        let stalled = stalls
+            .borrow_mut()
+            .observe(started.elapsed().as_secs_f64(), &act.transfers);
 
         let speed_text = if act.speed > 1.0 {
             format!("{}/s", syncs::human_bytes(act.speed as i64))
@@ -78,10 +87,16 @@ pub fn start_polling(ui: &Rc<Ui>) {
         for t in &act.transfers {
             seen.insert(t.name.clone());
             let frac = (t.percentage / 100.0).clamp(0.0, 1.0);
-            let subtitle = transfer_sub(t);
+            let is_stalled = stalled.contains(&t.name);
+            let subtitle = if is_stalled {
+                format!("Stalled \u{00b7} no progress \u{00b7} {}", transfer_sub(t))
+            } else {
+                transfer_sub(t)
+            };
             if let Some((row, bar)) = map.get(&t.name) {
                 bar.set_fraction(frac);
                 row.set_subtitle(&subtitle);
+                mark_stalled(row, is_stalled);
             } else {
                 let row = adw::ActionRow::builder()
                     .title(&t.name)
@@ -94,6 +109,7 @@ pub fn start_polling(ui: &Rc<Ui>) {
                 bar.set_fraction(frac);
                 row.add_suffix(&bar);
                 ui.activity_list.append(&row);
+                mark_stalled(&row, is_stalled);
                 map.insert(t.name.clone(), (row, bar));
             }
         }
@@ -125,6 +141,16 @@ pub fn start_polling(ui: &Rc<Ui>) {
 
         glib::ControlFlow::Continue
     });
+}
+
+/// Toggle the warning styling on a row whose transfer is stalled, so a frozen transfer reads
+/// as a problem at a glance rather than just slow.
+fn mark_stalled(row: &adw::ActionRow, stalled: bool) {
+    if stalled {
+        row.add_css_class("warning");
+    } else {
+        row.remove_css_class("warning");
+    }
 }
 
 fn transfer_sub(t: &esp_core::Transfer) -> String {

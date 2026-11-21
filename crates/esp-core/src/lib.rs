@@ -13,6 +13,7 @@ pub mod backups;
 pub mod connect;
 pub mod engine;
 pub mod jobs;
+pub mod stall;
 pub mod tuning;
 
 pub use backups::{
@@ -24,6 +25,7 @@ pub use engine::{
     JobStatus, Mount, Rcd, Transfer,
 };
 pub use jobs::{load_jobs, save_jobs, slug_id, Endpoint, Job, SyncMode};
+pub use stall::{StallTracker, DEFAULT_STALL_SECS};
 pub use tuning::{backend_of, tuning_for, Tuning};
 
 /// Serializes tests that mutate process-global env (XDG_CONFIG_HOME, RCLONE_CONFIG). Cargo
