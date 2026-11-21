@@ -12,8 +12,8 @@
 //! machine's real rclone remotes.
 
 use esp_core::{
-    create_remote, init_repo, list_snapshots, restic_path, run_backup, BackupJob, Endpoint, Job,
-    Rcd, SyncMode,
+    create_remote, init_repo, list_snapshots, mount, restic_path, run_backup, unmount, BackupJob,
+    Endpoint, Job, Rcd, SyncMode,
 };
 use std::time::{Duration, Instant};
 
@@ -41,6 +41,9 @@ fn s3_sync_and_backup_roundtrip() {
     let key = std::env::var("OORTERY_S3_KEY").expect("OORTERY_S3_KEY");
     let secret = std::env::var("OORTERY_S3_SECRET").expect("OORTERY_S3_SECRET");
     let bucket = std::env::var("OORTERY_S3_BUCKET").unwrap_or_else(|_| "oortery-it".into());
+    // Per-run prefix so repeat runs against a persistent MinIO stay isolated (a reused restic
+    // repo would otherwise accumulate snapshots and make the count non-deterministic).
+    let prefix = format!("{bucket}/run-{}", std::process::id());
 
     let base = std::env::temp_dir().join(format!("oortery-s3it-{}", std::process::id()));
     std::fs::create_dir_all(&base).unwrap();
@@ -73,7 +76,7 @@ fn s3_sync_and_backup_roundtrip() {
         id: "s3-up".into(),
         name: "s3 up".into(),
         src: Endpoint::local(src.to_string_lossy().into_owned()),
-        dst: Endpoint::remote("s3it", format!("{bucket}/sync")),
+        dst: Endpoint::remote("s3it", format!("{prefix}/sync")),
         mode: SyncMode::Copy,
     };
     run_sync(&rcd, &up, "it/s3-up");
@@ -84,7 +87,7 @@ fn s3_sync_and_backup_roundtrip() {
     let dn = Job {
         id: "s3-down".into(),
         name: "s3 down".into(),
-        src: Endpoint::remote("s3it", format!("{bucket}/sync")),
+        src: Endpoint::remote("s3it", format!("{prefix}/sync")),
         dst: Endpoint::local(down.to_string_lossy().into_owned()),
         mode: SyncMode::Copy,
     };
@@ -99,13 +102,33 @@ fn s3_sync_and_backup_roundtrip() {
         "beta.txt missing after S3 round-trip"
     );
 
+    // --- Mount path: expose the S3 prefix as a local folder and read a file through it ---
+    if std::path::Path::new("/dev/fuse").exists() {
+        let point = base.join("mnt");
+        std::fs::create_dir_all(&point).unwrap();
+        let point_s = point.to_string_lossy().into_owned();
+        mount(rcd.port(), &format!("s3it:{prefix}/sync"), &point_s).expect("mount S3");
+        let mut visible = false;
+        for _ in 0..50 {
+            if point.join("alpha.txt").exists() {
+                visible = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        assert!(visible, "alpha.txt not visible through the S3 mount");
+        unmount(rcd.port(), &point_s).expect("unmount S3");
+    } else {
+        eprintln!("no /dev/fuse; skipping S3 mount check");
+    }
+
     // --- restic backup over rclone -> S3, with the integrity gate against real object storage ---
     if restic_path().is_some() {
         let bjob = BackupJob {
             id: "s3-backup".into(),
             name: "s3 backup".into(),
             sources: vec![src.to_string_lossy().into_owned()],
-            repo: Endpoint::remote("s3it", format!("{bucket}/restic")),
+            repo: Endpoint::remote("s3it", format!("{prefix}/restic")),
             excludes: Vec::new(),
         };
         esp_core::save_password(&bjob.id, "it-pw").expect("save pw");
