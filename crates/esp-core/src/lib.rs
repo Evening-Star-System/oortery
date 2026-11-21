@@ -12,6 +12,7 @@ use std::process::Command;
 pub mod autostart;
 pub mod backups;
 pub mod connect;
+pub mod dashboard;
 pub mod engine;
 pub mod jobs;
 pub mod portable;
@@ -25,6 +26,7 @@ pub use backups::{
     check_repo, init_repo, list_snapshots, load_backups, password_file, restic_path, restore,
     run_backup, save_backups, save_password, unlock_repo, BackupJob, BackupPhase, Snapshot,
 };
+pub use dashboard::{ago, summary, Health, Summary};
 pub use engine::{
     activity, list_dirs, list_mounts, mount, rc_at, unmount, Activity, DirEntry, JobStats,
     JobStatus, Mount, Rcd, Transfer,

@@ -36,7 +36,13 @@ pub struct Ui {
     pub activity_list: gtk::ListBox,
     pub activity_speed: gtk::Label,
     pub active_label: gtk::Label,
-    pub backups_count: gtk::Label,
+    // Overview health banner + freshness/coverage tiles (status-first, per the dashboard research).
+    pub health_banner: gtk::Box,
+    pub health_icon: gtk::Image,
+    pub health_text: gtk::Label,
+    pub health_sub: gtk::Label,
+    pub last_backup_label: gtk::Label,
+    pub coverage_label: gtk::Label,
     /// The operations daemon, started lazily the first time a job runs.
     pub rcd: RefCell<Option<Rc<esp_core::Rcd>>>,
     /// Number of jobs currently running (drives the Overview stat).
@@ -97,6 +103,43 @@ pub fn refresh(ui: &Rc<Ui>) {
     }
     ui.remotes_count.set_text(&remotes.len().to_string());
     ui.node_count.set(remotes.len().max(6));
+    update_overview(ui);
+}
+
+/// Recompute the Overview health verdict and freshness/coverage tiles from the (cheap, local)
+/// protection summary. Called whenever remotes, syncs, or backups change. Status-first, per the
+/// dashboard research: one "are we OK?" signal, named issues, semantic colour plus an icon.
+pub fn update_overview(ui: &Rc<Ui>) {
+    let s = esp_core::summary();
+
+    for class in ["healthy", "attention", "firstrun"] {
+        ui.health_banner.remove_css_class(class);
+    }
+    let (class, icon) = match s.health {
+        esp_core::Health::Healthy => ("healthy", "emblem-ok-symbolic"),
+        esp_core::Health::Attention => ("attention", "dialog-warning-symbolic"),
+        esp_core::Health::FirstRun => ("firstrun", "weather-clear-night-symbolic"),
+    };
+    ui.health_banner.add_css_class(class);
+    ui.health_icon.set_icon_name(Some(icon));
+    ui.health_text.set_text(&s.headline);
+
+    // Secondary line: freshness when we have it, else gentle guidance.
+    let sub = match s.newest_backup_age {
+        Some(age) => format!("Last backup {}", esp_core::ago(age)),
+        None if s.backups > 0 => "No backups have run yet".to_string(),
+        None => "Your data is not backed up yet".to_string(),
+    };
+    ui.health_sub.set_text(&sub);
+
+    // Tiles.
+    ui.last_backup_label.set_text(
+        &s.newest_backup_age
+            .map(esp_core::ago)
+            .unwrap_or_else(|| "never".to_string()),
+    );
+    ui.coverage_label
+        .set_text(&format!("{}/{}", s.backups_run, s.backups));
 }
 
 /// Prepend this executable's own directory to PATH, so a bundled rclone/restic (shipped beside
@@ -159,6 +202,20 @@ fn load_css() {
 
         .hero { border-radius: 18px; }
         .dim { opacity: 0.6; }
+
+        /* The 'are we OK?' banner. Status is carried by an icon AND a tinted left edge + glow,
+           never colour alone. Periwinkle is the brand accent, so red/amber stay free for alerts. */
+        .health-banner { padding: 16px 20px; border-radius: 16px;
+                         border: 1px solid alpha(@accent_color, 0.12);
+                         border-left: 4px solid alpha(@accent_color, 0.5);
+                         background: linear-gradient(to right, alpha(#8a7cf0, 0.10), alpha(#ffffff, 0.02)); }
+        .health-banner.healthy  { border-left-color: #4fd196;
+                         background: linear-gradient(to right, alpha(#2fbf7f, 0.16), alpha(#ffffff, 0.02)); }
+        .health-banner.healthy image { color: #6fe3ad; }
+        .health-banner.attention { border-left-color: #f0b94f;
+                         background: linear-gradient(to right, alpha(#f0a84f, 0.18), alpha(#ffffff, 0.02)); }
+        .health-banner.attention image { color: #ffcf7a; }
+        .health-banner.firstrun image { color: @accent_color; }
 
         /* Stat cards: a faint top-lit glass panel with a periwinkle edge. */
         .stat-card { padding: 18px 22px; min-width: 150px; border-radius: 16px;
@@ -296,12 +353,11 @@ const PAGES: &[PageDef] = &[
 
 fn build_ui(app: &adw::Application) {
     let providers = esp_core::list_providers().unwrap_or_default();
-    let provider_count = providers.len();
     let node_count = Rc::new(Cell::new(6usize));
 
     let stack = adw::ViewStack::new();
-    let (overview, remotes_count, active_label, backups_count) =
-        overview_page(provider_count, &node_count);
+    let ov = overview_page(&node_count);
+    let overview = ov.page.clone();
     let (remotes_widget, remotes_list) = remotes_page();
     let (syncs_widget, syncs_list, new_sync_btn) = syncs::page();
     let (mounts_widget, mounts_list) = mounts::page();
@@ -452,15 +508,20 @@ fn build_ui(app: &adw::Application) {
         toasts,
         providers,
         remotes_list,
-        remotes_count,
+        remotes_count: ov.remotes,
         node_count,
         syncs_list,
         mounts_list,
         backups_list,
         activity_list,
         activity_speed,
-        active_label,
-        backups_count,
+        active_label: ov.active,
+        health_banner: ov.health_banner,
+        health_icon: ov.health_icon,
+        health_text: ov.health_text,
+        health_sub: ov.health_sub,
+        last_backup_label: ov.last_backup,
+        coverage_label: ov.coverage,
         rcd: RefCell::new(None),
         active_syncs: Rc::new(Cell::new(0)),
         run_seq: Cell::new(0),
@@ -522,24 +583,54 @@ fn build_ui(app: &adw::Application) {
     }
 }
 
-fn overview_page(
-    providers: usize,
-    node_count: &Rc<Cell<usize>>,
-) -> (gtk::Widget, gtk::Label, gtk::Label, gtk::Label) {
+/// The widgets the Overview exposes for live updates (the health banner and the tiles).
+struct OverviewWidgets {
+    page: gtk::Widget,
+    health_banner: gtk::Box,
+    health_icon: gtk::Image,
+    health_text: gtk::Label,
+    health_sub: gtk::Label,
+    last_backup: gtk::Label,
+    coverage: gtk::Label,
+    remotes: gtk::Label,
+    active: gtk::Label,
+}
+
+fn overview_page(node_count: &Rc<Cell<usize>>) -> OverviewWidgets {
     let clamp = adw::Clamp::new();
     clamp.set_maximum_size(1000);
     let scroll = gtk::ScrolledWindow::new();
     scroll.set_vexpand(true);
 
-    let col = gtk::Box::new(gtk::Orientation::Vertical, 22);
+    let col = gtk::Box::new(gtk::Orientation::Vertical, 20);
     col.set_margin_top(24);
     col.set_margin_bottom(24);
     col.set_margin_start(24);
     col.set_margin_end(24);
 
+    // The "are we OK?" banner: the first thing the eye lands on. Colour + icon + named verdict.
+    let health_banner = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+    health_banner.add_css_class("health-banner");
+    let health_icon = gtk::Image::from_icon_name("emblem-ok-symbolic");
+    health_icon.set_pixel_size(28);
+    let health_texts = gtk::Box::new(gtk::Orientation::Vertical, 1);
+    health_texts.set_hexpand(true);
+    let health_text = gtk::Label::new(Some("Checking\u{2026}"));
+    health_text.add_css_class("title-3");
+    health_text.set_xalign(0.0);
+    let health_sub = gtk::Label::new(None);
+    health_sub.add_css_class("dim");
+    health_sub.set_xalign(0.0);
+    health_texts.append(&health_text);
+    health_texts.append(&health_sub);
+    health_banner.append(&health_icon);
+    health_banner.append(&health_texts);
+    col.append(&health_banner);
+
+    // The living-sky hero: brand and awe, now secondary to the verdict above it.
     let hero = gtk::DrawingArea::new();
     hero.add_css_class("hero");
-    hero.set_content_height(340);
+    hero.set_content_height(300);
     hero.set_hexpand(true);
     let phase = Rc::new(Cell::new(0.0f64));
     hero.set_draw_func(glib::clone!(
@@ -558,20 +649,32 @@ fn overview_page(
     });
     col.append(&hero);
 
-    let stats = gtk::Box::new(gtk::Orientation::Horizontal, 16);
-    stats.set_homogeneous(true);
-    let (remotes_card, remotes_count) = stat_card("0", "REMOTES", true);
-    stats.append(&remotes_card);
-    stats.append(&stat_card(&format!("{providers}"), "PROVIDERS READY", false).0);
-    let (active_card, active_label) = stat_card("0", "ACTIVE SYNCS", false);
-    stats.append(&active_card);
-    let (backups_card, backups_count) = stat_card("0", "BACKUPS", false);
-    stats.append(&backups_card);
-    col.append(&stats);
+    // Actionable tiles: freshness, coverage, remotes, and live activity. No vanity counters.
+    let tiles = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+    tiles.set_homogeneous(true);
+    let (last_card, last_backup) = stat_card("never", "LAST BACKUP", true);
+    let (cov_card, coverage) = stat_card("0/0", "PROTECTED", false);
+    let (rem_card, remotes) = stat_card("0", "REMOTES", false);
+    let (act_card, active) = stat_card("0", "RUNNING NOW", false);
+    tiles.append(&last_card);
+    tiles.append(&cov_card);
+    tiles.append(&rem_card);
+    tiles.append(&act_card);
+    col.append(&tiles);
 
     scroll.set_child(Some(&col));
     clamp.set_child(Some(&scroll));
-    (clamp.upcast(), remotes_count, active_label, backups_count)
+    OverviewWidgets {
+        page: clamp.upcast(),
+        health_banner,
+        health_icon,
+        health_text,
+        health_sub,
+        last_backup,
+        coverage,
+        remotes,
+        active,
+    }
 }
 
 fn stat_card(number: &str, caption: &str, accent: bool) -> (gtk::Widget, gtk::Label) {

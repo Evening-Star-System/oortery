@@ -66,7 +66,7 @@ pub fn refresh(ui: &Rc<Ui>) {
         ui.backups_list.remove(&child);
     }
     let jobs = esp_core::load_backups().unwrap_or_default();
-    ui.backups_count.set_text(&jobs.len().to_string());
+    crate::update_overview(ui);
     if esp_core::restic_path().is_none() {
         let row = adw::ActionRow::builder()
             .title("restic is not installed")
