@@ -4,6 +4,7 @@
 
 use crate::Ui;
 use adw::prelude::*;
+use gtk::glib;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -108,6 +109,33 @@ pub fn refresh(ui: &Rc<Ui>) {
         row.add_suffix(&btn);
         ui.mounts_list.append(&row);
     }
+
+    // Headless aid: click the first Mount/Unmount toggle once the page maps.
+    if std::env::var("ESP_MOUNT_AUTORUN").is_ok() {
+        if let Some(first) = ui.mounts_list.first_child() {
+            if let Some(btn) = first_button(&first) {
+                glib::timeout_add_local_once(std::time::Duration::from_millis(800), move || {
+                    btn.activate();
+                });
+            }
+        }
+    }
+}
+
+/// The first button found within a row (the Mount/Unmount toggle; used by the headless aid).
+fn first_button(root: &gtk::Widget) -> Option<gtk::Button> {
+    let mut stack = vec![root.clone()];
+    while let Some(w) = stack.pop() {
+        if let Ok(btn) = w.clone().downcast::<gtk::Button>() {
+            return Some(btn);
+        }
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            stack.push(c.clone());
+            child = c.next_sibling();
+        }
+    }
+    None
 }
 
 fn mount(ui: &Rc<Ui>, name: &str) {
@@ -123,13 +151,31 @@ fn mount(ui: &Rc<Ui>, name: &str) {
         ui.toast(&format!("Could not create {point}: {e}"));
         return;
     }
-    match esp_core::mount(rcd.port(), &format!("{name}:"), &point) {
-        Ok(()) => {
-            refresh(ui);
-            ui.toast(&format!("Mounted {name} at {point}"));
+    // Mount on a worker thread: a cloud (e.g. Google Drive) can take seconds to initialise its
+    // VFS, and doing that on the UI thread freezes the whole app.
+    ui.toast(&format!("Mounting {name}\u{2026}"));
+    let (tx, rx) = async_channel::bounded(1);
+    let (port, fs, point_t) = (rcd.port(), format!("{name}:"), point.clone());
+    std::thread::spawn(move || {
+        let _ = tx.send_blocking(esp_core::mount(port, &fs, &point_t).map_err(|e| e.to_string()));
+    });
+    let (ui_c, name_c, point_c) = (ui.clone(), name.to_string(), point);
+    glib::spawn_future_local(async move {
+        match rx.recv().await {
+            Ok(Ok(())) => {
+                // Let the daemon register the mount before we re-query listmounts, so the row
+                // flips to "Unmount" on the first refresh.
+                glib::timeout_future(std::time::Duration::from_millis(500)).await;
+                refresh(&ui_c);
+                ui_c.toast(&format!("Mounted {name_c} at {point_c}"));
+            }
+            Ok(Err(e)) => {
+                refresh(&ui_c);
+                ui_c.toast(&format!("Could not mount {name_c}: {e}"));
+            }
+            Err(_) => {}
         }
-        Err(e) => ui.toast(&format!("Could not mount {name}: {e}")),
-    }
+    });
 }
 
 fn unmount(ui: &Rc<Ui>, name: &str) {
@@ -137,12 +183,25 @@ fn unmount(ui: &Rc<Ui>, name: &str) {
         refresh(ui);
         return;
     };
-    let point = point_for(name);
-    match esp_core::unmount(rcd.port(), &point) {
-        Ok(()) => {
-            refresh(ui);
-            ui.toast(&format!("Unmounted {name}"));
+    // Unmount off the UI thread too, for the same reason (a busy mount can be slow to release).
+    ui.toast(&format!("Unmounting {name}\u{2026}"));
+    let (tx, rx) = async_channel::bounded(1);
+    let (port, point_t) = (rcd.port(), point_for(name));
+    std::thread::spawn(move || {
+        let _ = tx.send_blocking(esp_core::unmount(port, &point_t).map_err(|e| e.to_string()));
+    });
+    let (ui_c, name_c) = (ui.clone(), name.to_string());
+    glib::spawn_future_local(async move {
+        match rx.recv().await {
+            Ok(Ok(())) => {
+                refresh(&ui_c);
+                ui_c.toast(&format!("Unmounted {name_c}"));
+            }
+            Ok(Err(e)) => {
+                refresh(&ui_c);
+                ui_c.toast(&format!("Could not unmount {name_c}: {e}"));
+            }
+            Err(_) => {}
         }
-        Err(e) => ui.toast(&format!("Could not unmount {name}: {e}")),
-    }
+    });
 }
