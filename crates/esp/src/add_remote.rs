@@ -30,6 +30,12 @@ pub fn present(ui: &Rc<Ui>) {
             nav.push(&config_page(ui, p, &dialog));
         }
     }
+    // Headless aid: jump straight to a preset form (e.g. ESP_PRESET=r2) for screenshots.
+    if let Some(id) = crate::aid("ESP_PRESET") {
+        if let Some(p) = esp_core::presets::preset(&id) {
+            nav.push(&preset_page(ui, p, &dialog));
+        }
+    }
 }
 
 fn first_line(s: &str) -> &str {
@@ -202,9 +208,32 @@ fn preset_page(
     gname.add(&name_row);
     prefs.add(&gname);
 
+    // A handheld "set it up" section: the plain-language note, then a numbered walkthrough, so a
+    // first-timer knows exactly where to click and what each field wants.
+    let steps_group = adw::PreferencesGroup::builder()
+        .title("Set it up")
+        .description(preset.help)
+        .build();
+    let steps_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    steps_box.set_margin_top(4);
+    steps_box.set_margin_bottom(4);
+    for (i, step) in preset.steps.iter().enumerate() {
+        let label = gtk::Label::new(Some(&format!("{}.  {step}", i + 1)));
+        label.set_wrap(true);
+        label.set_xalign(0.0);
+        label.add_css_class("dim");
+        steps_box.append(&label);
+    }
+    if !preset.steps.is_empty() {
+        steps_group.add(&steps_box);
+        prefs.add(&steps_group);
+    }
+
     let gopts = adw::PreferencesGroup::builder()
-        .title(preset.name)
-        .description(preset.blurb)
+        .title("Your keys")
+        .description(
+            "Your provider shows the secret only once. Copy it before you leave that page.",
+        )
         .build();
     // (key, label, required, entry)
     let mut fields: Vec<(String, String, bool, gtk::Editable)> = Vec::new();

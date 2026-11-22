@@ -349,9 +349,32 @@ pub fn verify_remote(name: &str) -> Result<()> {
         .output()
         .context("failed to run `rclone lsd` to verify the remote")?;
     if !out.status.success() {
-        anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+        let raw = String::from_utf8_lossy(&out.stderr);
+        anyhow::bail!("{}", friendly_connect_error(&raw));
     }
     Ok(())
+}
+
+/// Turn rclone's raw stderr into a short, actionable message for the common object-store failures,
+/// so a new user knows what to fix instead of reading an SDK stack trace. Falls back to the trimmed
+/// raw text for anything we do not recognise. (Error-code matching, borrowed from Arcalox's probe.)
+fn friendly_connect_error(stderr: &str) -> String {
+    let s = stderr.to_lowercase();
+    if s.contains("accessdenied")
+        || s.contains("signaturedoesnotmatch")
+        || s.contains("invalidaccesskeyid")
+        || s.contains("403")
+    {
+        "Access denied. Check the access key and secret, and that the key is allowed on this bucket."
+            .to_string()
+    } else if s.contains("nosuchbucket") || s.contains("bucket does not exist") {
+        "That bucket was not found. Check the bucket name and that the endpoint matches it."
+            .to_string()
+    } else if s.contains("no such host") || s.contains("dial tcp") || s.contains("timeout") {
+        "Could not reach the server. Check the endpoint URL and your connection.".to_string()
+    } else {
+        stderr.trim().to_string()
+    }
 }
 
 /// A friendly, human label for a backend id (for icons/subtitles). Falls back to the id.
@@ -378,6 +401,16 @@ pub fn backend_label(backend: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn friendly_errors_map_common_s3_failures() {
+        assert!(friendly_connect_error("... AccessDenied: ...").contains("Access denied"));
+        assert!(friendly_connect_error("SignatureDoesNotMatch").contains("Access denied"));
+        assert!(friendly_connect_error("NoSuchBucket: ...").contains("bucket was not found"));
+        assert!(friendly_connect_error("dial tcp: i/o timeout").contains("Could not reach"));
+        // Unknown errors fall back to the trimmed raw text.
+        assert_eq!(friendly_connect_error("  weird thing  "), "weird thing");
+    }
 
     #[test]
     fn proton_gets_a_default_app_version_unless_set() {
