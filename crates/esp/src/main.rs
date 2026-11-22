@@ -13,6 +13,7 @@ mod diagnostics;
 mod folder_browser;
 mod lockscreen;
 mod mounts;
+mod peers;
 mod prefs;
 mod spinner;
 mod syncs;
@@ -54,6 +55,13 @@ pub struct Ui {
     pub overview_tiles: gtk::Box,
     /// The operations daemon, started lazily the first time a job runs.
     pub rcd: RefCell<Option<Rc<esp_core::Rcd>>>,
+    /// The P2P (Syncthing) daemon, started lazily the first time the Peers page is opened.
+    pub syncthingd: RefCell<Option<Rc<esp_core::Syncthingd>>>,
+    /// Peers page handles, populated once the daemon is up.
+    pub peers_list: gtk::ListBox,
+    pub peers_id: gtk::Label,
+    pub peers_qr: gtk::DrawingArea,
+    pub peers_started: Cell<bool>,
     /// Number of jobs currently running (drives the Overview stat).
     pub active_syncs: Rc<Cell<usize>>,
     /// Monotonic counter so each run gets a fresh stats group.
@@ -83,6 +91,17 @@ impl Ui {
         let rcd = Rc::new(esp_core::Rcd::start()?);
         *self.rcd.borrow_mut() = Some(rcd.clone());
         Ok(rcd)
+    }
+
+    /// Start (or reuse) the P2P (Syncthing) daemon. Started lazily so Oortery does not run it
+    /// unless the user actually opens Peers.
+    pub fn ensure_syncthingd(&self) -> anyhow::Result<Rc<esp_core::Syncthingd>> {
+        if let Some(d) = self.syncthingd.borrow().as_ref() {
+            return Ok(d.clone());
+        }
+        let d = Rc::new(esp_core::Syncthingd::start()?);
+        *self.syncthingd.borrow_mut() = Some(d.clone());
+        Ok(d)
     }
 
     /// Reflect the running-job count in the Overview stat.
@@ -437,6 +456,11 @@ const PAGES: &[PageDef] = &[
         icon: "folder-symbolic",
     },
     PageDef {
+        name: "peers",
+        title: "Peers",
+        icon: "network-wireless-symbolic",
+    },
+    PageDef {
         name: "backups",
         title: "Backups",
         icon: "drive-harddisk-symbolic",
@@ -458,12 +482,14 @@ fn build_ui(app: &adw::Application) {
     let (remotes_widget, remotes_list) = remotes_page();
     let (syncs_widget, syncs_list, new_sync_btn) = syncs::page();
     let (mounts_widget, mounts_list) = mounts::page();
+    let peers_pg = peers::page();
     let (backups_widget, backups_list, new_backup_btn) = backups::page();
     let (activity_widget, activity_speed, activity_list) = activity::page();
     stack.add_named(&overview, Some("overview"));
     stack.add_named(&remotes_widget, Some("remotes"));
     stack.add_named(&syncs_widget, Some("syncs"));
     stack.add_named(&mounts_widget, Some("mounts"));
+    stack.add_named(&peers_pg.widget, Some("peers"));
     stack.add_named(&backups_widget, Some("backups"));
     stack.add_named(&activity_widget, Some("activity"));
 
@@ -637,6 +663,11 @@ fn build_ui(app: &adw::Application) {
         overview_onboarding: ov.onboarding,
         overview_tiles: ov.tiles,
         rcd: RefCell::new(None),
+        syncthingd: RefCell::new(None),
+        peers_list: peers_pg.list.clone(),
+        peers_id: peers_pg.id_label.clone(),
+        peers_qr: peers_pg.qr.clone(),
+        peers_started: Cell::new(false),
         active_syncs: Rc::new(Cell::new(0)),
         run_seq: Cell::new(0),
     });
@@ -705,6 +736,23 @@ fn build_ui(app: &adw::Application) {
 
     let ui_for_add = ui.clone();
     add_btn.connect_clicked(move |_| add_remote::present(&ui_for_add));
+
+    // Peers: add a device, and start the engine + fill the page the first time it is opened.
+    let ui_peers_add = ui.clone();
+    peers_pg
+        .add_btn
+        .connect_clicked(move |_| peers::add_device_dialog(&ui_peers_add));
+    let ui_peers_show = ui.clone();
+    stack.connect_visible_child_notify(move |s| {
+        if s.visible_child_name().is_some_and(|n| n == "peers") {
+            peers::refresh(&ui_peers_show);
+        }
+    });
+    // If Peers is the page shown at launch, the notify above was wired after that selection, so
+    // trigger the first fill directly.
+    if stack.visible_child_name().is_some_and(|n| n == "peers") {
+        peers::refresh(&ui);
+    }
     let ui_for_new_sync = ui.clone();
     new_sync_btn.connect_clicked(move |_| syncs::present_new(&ui_for_new_sync, None));
     let ui_for_new_backup = ui.clone();

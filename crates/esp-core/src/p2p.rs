@@ -170,7 +170,10 @@ impl Syncthingd {
     fn await_ready(&self) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(25);
         loop {
-            if self.cli(&["show", "system"]).is_ok() {
+            // Wait for the device ID to be readable, not merely for the API to answer: right after
+            // startup `show system` can return before `myID` is populated, and a caller that reads
+            // the device ID that instant would get an empty value.
+            if self.device_id().map(|id| !id.is_empty()).unwrap_or(false) {
                 return Ok(());
             }
             if Instant::now() > deadline {
