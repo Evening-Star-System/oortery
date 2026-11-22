@@ -42,6 +42,31 @@ pub fn page() -> (gtk::Widget, gtk::ListBox) {
     (clamp.upcast(), list)
 }
 
+/// Re-mount every remote the user left mounted in a previous session, so "stay mounted" survives
+/// restarts and logins. Best-effort and quiet: a remote that no longer exists is skipped, one
+/// already mounted (e.g. on a second activation) is left alone, and a Tier-D remote that needs
+/// re-auth simply does not come back without blocking startup. Call once at startup.
+pub fn auto_remount(ui: &Rc<Ui>) {
+    let remembered = esp_core::mountkeep::remembered();
+    if remembered.is_empty() {
+        return;
+    }
+    let existing = esp_core::list_remotes().unwrap_or_default();
+    let already: Vec<String> = ui
+        .rcd
+        .borrow()
+        .as_ref()
+        .and_then(|rcd| esp_core::list_mounts(rcd.port()).ok())
+        .map(|ms| ms.into_iter().map(|m| m.mount_point).collect())
+        .unwrap_or_default();
+    for name in remembered {
+        let point = point_for(&name);
+        if existing.iter().any(|r| r.name == name) && !already.contains(&point) {
+            mount(ui, &name);
+        }
+    }
+}
+
 /// The default mountpoint for a remote: `$HOME/Oortery/<remote>`.
 fn point_for(name: &str) -> String {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
@@ -166,6 +191,8 @@ fn mount(ui: &Rc<Ui>, name: &str) {
                 glib::timeout_future(std::time::Duration::from_millis(500)).await;
                 // Make it show up in the file manager sidebar, like a plugged-in drive.
                 esp_core::desktop::add_place(&point_c, &name_c);
+                // Remember it so it comes back on the next launch / at login.
+                let _ = esp_core::mountkeep::remember(&name_c);
                 refresh(&ui_c);
                 ui_c.toast(&format!("Mounted {name_c} at {point_c}"));
             }
@@ -235,8 +262,9 @@ fn remove_now(ui: &Rc<Ui>, name: &str) {
 }
 
 fn finish_remove(ui: &Rc<Ui>, name: &str) {
-    // A removed remote's mount is gone, so drop its sidebar bookmark too.
+    // A removed remote's mount is gone, so drop its sidebar bookmark and keep-mounted record too.
     esp_core::desktop::remove_place(&point_for(name));
+    let _ = esp_core::mountkeep::forget(name);
     match esp_core::delete_remote(name) {
         Ok(()) => {
             crate::refresh_all(ui);
@@ -263,6 +291,8 @@ fn unmount(ui: &Rc<Ui>, name: &str) {
         match rx.recv().await {
             Ok(Ok(())) => {
                 esp_core::desktop::remove_place(&point_for(&name_c));
+                // The user chose to unmount, so do not auto-remount it next time.
+                let _ = esp_core::mountkeep::forget(&name_c);
                 refresh(&ui_c);
                 ui_c.toast(&format!("Unmounted {name_c}"));
             }

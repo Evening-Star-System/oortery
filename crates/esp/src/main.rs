@@ -677,6 +677,10 @@ fn build_ui(app: &adw::Application) {
 
     window.present();
 
+    // Bring back whatever the user left mounted last time, so "stay mounted" survives restarts and
+    // logins (paired with Start-at-login in Preferences). Quiet and best-effort.
+    mounts::auto_remount(&ui);
+
     // Headless aid: auto-open the add-remote dialog for screenshots.
     if aid("ESP_DIALOG").is_some() {
         add_remote::present(&ui);

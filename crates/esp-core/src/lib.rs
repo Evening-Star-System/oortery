@@ -18,6 +18,7 @@ pub mod diag;
 pub mod engine;
 pub mod jobs;
 pub mod lock;
+pub mod mountkeep;
 pub mod p2p;
 pub mod portable;
 pub mod preflight;
