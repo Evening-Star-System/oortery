@@ -112,6 +112,14 @@ pub fn refresh(ui: &Rc<Ui>) {
             tag.add_css_class("dim");
             tag.add_css_class("caption");
             row.add_suffix(&tag);
+            // Edit this remote's settings (prefilled form, saved with rclone config update).
+            let edit = gtk::Button::from_icon_name("document-edit-symbolic");
+            edit.set_tooltip_text(Some("Edit this remote"));
+            edit.set_valign(gtk::Align::Center);
+            edit.add_css_class("flat");
+            let (ui_e, name_e) = (ui.clone(), r.name.clone());
+            edit.connect_clicked(move |_| add_remote::present_edit(&ui_e, &name_e));
+            row.add_suffix(&edit);
             // Remove this remote (its connection config only; never the files in the cloud).
             let remove = gtk::Button::from_icon_name("user-trash-symbolic");
             remove.set_tooltip_text(Some("Remove this remote"));
@@ -684,6 +692,10 @@ fn build_ui(app: &adw::Application) {
     // Headless aid: auto-open the new-backup dialog for screenshots.
     if aid("ESP_BACKUP_DIALOG").is_some() {
         backups::present_new(&ui, None);
+    }
+    // Headless aid: auto-open the edit dialog for the named remote.
+    if let Some(name) = aid("ESP_EDIT") {
+        add_remote::present_edit(&ui, &name);
     }
     // Headless aid: auto-open the Diagnostics dialog for screenshots.
     if aid("ESP_DIAG").is_some() {

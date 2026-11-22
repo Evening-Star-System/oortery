@@ -240,6 +240,63 @@ pub fn delete_remote(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Read a configured remote's stored settings: its backend `type` plus each key/value. Password
+/// values come back obscured and are not meant to be displayed, so the editor leaves password fields
+/// blank (filling one replaces it; leaving it blank keeps the current one).
+pub fn remote_values(name: &str) -> Result<std::collections::BTreeMap<String, String>> {
+    let out = Command::new("rclone")
+        .args(["config", "dump"])
+        .output()
+        .context("failed to run `rclone config dump`")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "rclone config dump failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let all: serde_json::Value =
+        serde_json::from_slice(&out.stdout).context("parsing rclone config dump")?;
+    let obj = all
+        .get(name)
+        .and_then(|v| v.as_object())
+        .with_context(|| format!("remote \"{name}\" not found"))?;
+    Ok(obj
+        .iter()
+        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+        .collect())
+}
+
+/// Update an existing remote's settings. Only the keys given are changed; blank values are skipped,
+/// so a password field left blank keeps its current value. rclone obscures password fields itself.
+pub fn update_remote(name: &str, params: &[(String, String)]) -> Result<()> {
+    let filled: Vec<&(String, String)> = params.iter().filter(|(_, v)| !v.is_empty()).collect();
+    if filled.is_empty() {
+        return Ok(()); // nothing to change
+    }
+    let mut args: Vec<String> = vec![
+        "config".into(),
+        "update".into(),
+        "--non-interactive".into(),
+        "--".into(),
+        name.into(),
+    ];
+    for (k, v) in filled {
+        args.push(k.clone());
+        args.push(v.clone());
+    }
+    let out = Command::new("rclone")
+        .args(&args)
+        .output()
+        .context("failed to run `rclone config update`")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "rclone config update failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    Ok(())
+}
+
 /// A friendly, human label for a backend id (for icons/subtitles). Falls back to the id.
 pub fn backend_label(backend: &str) -> &str {
     match backend {

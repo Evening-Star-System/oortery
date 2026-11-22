@@ -245,6 +245,134 @@ fn oauth_page(
     });
 }
 
+/// Edit an existing remote: the same fields, prefilled from its current config, saved back with
+/// `rclone config update`. Password fields start blank (leave blank to keep the current value).
+pub fn present_edit(ui: &Rc<Ui>, name: &str) {
+    let values = match esp_core::remote_values(name) {
+        Ok(v) => v,
+        Err(e) => {
+            ui.error(&format!("Could not read \u{201c}{name}\u{201d}: {e}"));
+            return;
+        }
+    };
+    let backend = values.get("type").cloned().unwrap_or_default();
+    let Some(provider) = ui.providers.iter().find(|p| p.name == backend).cloned() else {
+        ui.error(&format!(
+            "\u{201c}{name}\u{201d} uses a backend Oortery cannot edit here ({backend})."
+        ));
+        return;
+    };
+
+    let dialog = adw::Dialog::builder()
+        .title(format!("Edit {name}"))
+        .content_width(560)
+        .content_height(640)
+        .build();
+    let prefs = adw::PreferencesPage::new();
+    let header = adw::HeaderBar::new();
+
+    let gopts = adw::PreferencesGroup::builder().title("Settings").build();
+    if let Some(hint) = backend_hint(&provider.name) {
+        gopts.set_description(Some(hint));
+    }
+    let mut fields: Vec<(String, gtk::Editable)> = Vec::new();
+    let mut add_field = |group: &adw::PreferencesGroup,
+                         exp: Option<&adw::ExpanderRow>,
+                         o: &esp_core::ProviderOption| {
+        let editable: gtk::Editable = if o.is_password || o.sensitive {
+            let row = adw::PasswordEntryRow::builder().title(&o.name).build();
+            row.set_tooltip_text(Some("Leave blank to keep the current value"));
+            match exp {
+                Some(e) => e.add_row(&row),
+                None => group.add(&row),
+            }
+            row.upcast()
+        } else {
+            let row = adw::EntryRow::builder().title(&o.name).build();
+            if let Some(v) = values.get(&o.name) {
+                row.set_text(v);
+            }
+            match exp {
+                Some(e) => e.add_row(&row),
+                None => group.add(&row),
+            }
+            row.upcast()
+        };
+        fields.push((o.name.clone(), editable));
+    };
+    for o in provider.basic_options() {
+        if o.name == "token" || o.name == "type" {
+            continue;
+        }
+        add_field(&gopts, None, o);
+    }
+    prefs.add(&gopts);
+
+    let advanced: Vec<_> = provider
+        .options
+        .iter()
+        .filter(|o| o.advanced && o.hide == 0 && o.name != "token")
+        .collect();
+    if !advanced.is_empty() {
+        let exp = adw::ExpanderRow::builder()
+            .title("Advanced settings")
+            .build();
+        for o in advanced {
+            add_field(&gopts, Some(&exp), o);
+        }
+        let agroup = adw::PreferencesGroup::new();
+        agroup.add(&exp);
+        prefs.add(&agroup);
+    }
+
+    let save = gtk::Button::with_label("Save");
+    save.add_css_class("suggested-action");
+    header.pack_end(&save);
+
+    let (ui2, dlg2, name2) = (ui.clone(), dialog.clone(), name.to_string());
+    save.connect_clicked(move |btn| {
+        let params: Vec<(String, String)> = fields
+            .iter()
+            .map(|(k, e)| (k.clone(), e.text().to_string()))
+            .collect();
+        btn.set_sensitive(false);
+        btn.set_label("Saving...");
+        let (tx, rx) = async_channel::bounded(1);
+        let (n, p) = (name2.clone(), params);
+        std::thread::spawn(move || {
+            let _ = tx.send_blocking(esp_core::update_remote(&n, &p).map_err(|e| e.to_string()));
+        });
+        let (ui_c, dlg_c, name_c, btn_c) = (ui2.clone(), dlg2.clone(), name2.clone(), btn.clone());
+        glib::spawn_future_local(async move {
+            match rx.recv().await {
+                Ok(Ok(())) => {
+                    dlg_c.close();
+                    crate::refresh_all(&ui_c);
+                    ui_c.toast(&format!("Saved {name_c}"));
+                }
+                Ok(Err(e)) => {
+                    btn_c.set_sensitive(true);
+                    btn_c.set_label("Save");
+                    ui_c.error(&format!("Could not save: {e}"));
+                }
+                Err(_) => {
+                    btn_c.set_sensitive(true);
+                    btn_c.set_label("Save");
+                }
+            }
+        });
+    });
+
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_vexpand(true);
+    scroll.set_child(Some(&prefs));
+    let tv = adw::ToolbarView::new();
+    tv.add_top_bar(&header);
+    tv.set_content(Some(&scroll));
+    dialog.set_child(Some(&tv));
+    dialog.present(Some(&ui.window));
+}
+
 /// Config-value backend: a short form of its settings, then Create.
 fn config_value_page(
     ui: &Rc<Ui>,
