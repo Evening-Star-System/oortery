@@ -254,7 +254,13 @@ fn run_job(
             return glib::ControlFlow::Break;
         };
         let stats = rcd.job_stats(&group);
-        bar_p.set_fraction(stats.fraction());
+        // Show real progress once the total is known; until then (scanning, or a backend with no
+        // total) pulse so the bar shows motion instead of sitting frozen at 0.
+        if stats.total_known() {
+            bar_p.set_fraction(stats.fraction());
+        } else if stats.active_without_total() {
+            bar_p.pulse();
+        }
         row_p.set_subtitle(&progress_text(&stats));
 
         let done = |message: String| {

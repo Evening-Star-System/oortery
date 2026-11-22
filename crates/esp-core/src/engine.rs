@@ -183,6 +183,18 @@ impl JobStats {
             0.0
         }
     }
+
+    /// True once rclone knows the total size, so a determinate fraction is meaningful. Until then
+    /// (it has not finished scanning, or the backend does not report a total) the UI should show an
+    /// indeterminate/pulsing bar rather than a bar stuck at 0.
+    pub fn total_known(&self) -> bool {
+        self.total_bytes > 0
+    }
+
+    /// Bytes are moving but rclone has no total yet: show motion, not a frozen 0.
+    pub fn active_without_total(&self) -> bool {
+        self.total_bytes <= 0 && self.bytes > 0
+    }
 }
 
 fn free_loopback_port() -> Result<u16> {
@@ -330,6 +342,15 @@ pub fn unmount(port: u16, mount_point: &str) -> Result<()> {
             }
         }
     }
+}
+
+/// Pause or resume all transfers by setting the daemon's bandwidth limit. `"1"` throttles to a
+/// crawl (an effective pause: in-flight transfers freeze and resume cleanly); `"off"` lifts it.
+/// rclone has no hard pause, so this is the standard freeze/resume; a stopped job would instead
+/// have to be re-run.
+pub fn set_transfer_rate(port: u16, rate: &str) -> Result<()> {
+    rc_at(port, "core/bwlimit", serde_json::json!({ "rate": rate }))?;
+    Ok(())
 }
 
 /// The mounts the daemon currently serves.

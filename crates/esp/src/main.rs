@@ -484,7 +484,7 @@ fn build_ui(app: &adw::Application) {
     let (mounts_widget, mounts_list) = mounts::page();
     let peers_pg = peers::page();
     let (backups_widget, backups_list, new_backup_btn) = backups::page();
-    let (activity_widget, activity_speed, activity_list) = activity::page();
+    let (activity_widget, activity_speed, activity_list, activity_pause) = activity::page();
     stack.add_named(&overview, Some("overview"));
     stack.add_named(&remotes_widget, Some("remotes"));
     stack.add_named(&syncs_widget, Some("syncs"));
@@ -523,7 +523,7 @@ fn build_ui(app: &adw::Application) {
         .unwrap_or(0) as i32;
     nav_list.select_row(nav_list.row_at_index(start_idx).as_ref());
 
-    let brand = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let brand_text = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let b1 = gtk::Label::new(Some("Oortery"));
     b1.add_css_class("title-4");
     b1.set_xalign(0.0);
@@ -531,8 +531,14 @@ fn build_ui(app: &adw::Application) {
     b2.add_css_class("caption");
     b2.add_css_class("dim");
     b2.set_xalign(0.0);
-    brand.append(&b1);
-    brand.append(&b2);
+    brand_text.append(&b1);
+    brand_text.append(&b2);
+    // The static evening-star glyph beside the name, so the brand carries the mark, not just text.
+    let logo = gtk::Image::from_icon_name(APP_ID);
+    logo.set_pixel_size(34);
+    let brand = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    brand.append(&logo);
+    brand.append(&brand_text);
 
     let sidebar_header = adw::HeaderBar::new();
     sidebar_header.set_title_widget(Some(&brand));
@@ -753,6 +759,29 @@ fn build_ui(app: &adw::Application) {
     if stack.visible_child_name().is_some_and(|n| n == "peers") {
         peers::refresh(&ui);
     }
+
+    // Pause / resume all transfers from the Activity header.
+    let ui_pause = ui.clone();
+    activity_pause.connect_toggled(move |btn| {
+        let paused = btn.is_active();
+        btn.set_label(if paused { "Resume" } else { "Pause" });
+        match ui_pause.ensure_rcd() {
+            Ok(rcd) => {
+                let rate = if paused { "1" } else { "off" };
+                if let Err(e) = esp_core::set_transfer_rate(rcd.port(), rate) {
+                    ui_pause.toast(&format!("Could not change transfers: {e}"));
+                } else {
+                    ui_pause.toast(if paused {
+                        "Transfers paused"
+                    } else {
+                        "Transfers resumed"
+                    });
+                }
+            }
+            Err(e) => ui_pause.toast(&format!("Could not reach the engine: {e}")),
+        }
+    });
+
     let ui_for_new_sync = ui.clone();
     new_sync_btn.connect_clicked(move |_| syncs::present_new(&ui_for_new_sync, None));
     let ui_for_new_backup = ui.clone();
@@ -838,6 +867,9 @@ fn overview_page(node_count: &Rc<Cell<usize>>) -> OverviewWidgets {
     clamp.set_maximum_size(1000);
     let scroll = gtk::ScrolledWindow::new();
     scroll.set_vexpand(true);
+    // A vertical app never wants a horizontal scrollbar: content should fit or wrap, not scroll
+    // sideways. This kills the stray bottom scrollbar on the dashboard.
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
 
     let col = gtk::Box::new(gtk::Orientation::Vertical, 20);
     col.set_margin_top(24);
@@ -879,9 +911,16 @@ fn overview_page(node_count: &Rc<Cell<usize>>) -> OverviewWidgets {
             constellation::draw(cr, w as f64, h as f64, phase.get(), node_count.get());
         }
     ));
+    // Cap the hero to ~30fps: the constellation is rasterised in software cairo every frame, so
+    // repainting on every vsync is needless CPU that can make the whole UI feel choppy under load.
+    let last_hero_draw = Cell::new(0i64);
     hero.add_tick_callback(move |area, clock| {
-        phase.set(clock.frame_time() as f64 / 1_000_000.0);
-        area.queue_draw();
+        let now = clock.frame_time();
+        phase.set(now as f64 / 1_000_000.0);
+        if now - last_hero_draw.get() >= 33_000 {
+            last_hero_draw.set(now);
+            area.queue_draw();
+        }
         glib::ControlFlow::Continue
     });
 
@@ -892,8 +931,7 @@ fn overview_page(node_count: &Rc<Cell<usize>>) -> OverviewWidgets {
     const EASTER_EGG_URL: &str = "https://eveningstar.app/"; // placeholder, replace later
     let egg = gtk::GestureClick::new();
     let egg_gen = Rc::new(Cell::new(0u64));
-    let (gen_press, gen_release, gen_cancel) =
-        (egg_gen.clone(), egg_gen.clone(), egg_gen.clone());
+    let (gen_press, gen_release, gen_cancel) = (egg_gen.clone(), egg_gen.clone(), egg_gen.clone());
     let hero_hit = hero.clone();
     egg.connect_pressed(move |_g, _n, x, y| {
         let (w, h) = (hero_hit.width() as f64, hero_hit.height() as f64);

@@ -35,8 +35,8 @@ pub use backups::{
 };
 pub use dashboard::{ago, summary, Health, Summary};
 pub use engine::{
-    activity, list_dirs, list_mounts, mount, rc_at, unmount, Activity, DirEntry, JobStats,
-    JobStatus, Mount, Rcd, Transfer,
+    activity, list_dirs, list_mounts, mount, rc_at, set_transfer_rate, unmount, Activity, DirEntry,
+    JobStats, JobStatus, Mount, Rcd, Transfer,
 };
 pub use jobs::{
     home_dir, load_jobs, now_unix, save_jobs, slug_id, took_corrupt_recovery, DayTime, Endpoint,

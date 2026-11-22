@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 /// Build the Activity page. Returns the page, the total-throughput label, and the list.
-pub fn page() -> (gtk::Widget, gtk::Label, gtk::ListBox) {
+pub fn page() -> (gtk::Widget, gtk::Label, gtk::ListBox, gtk::ToggleButton) {
     let clamp = adw::Clamp::new();
     clamp.set_maximum_size(820);
     let scroll = gtk::ScrolledWindow::new();
@@ -40,8 +40,14 @@ pub fn page() -> (gtk::Widget, gtk::Label, gtk::ListBox) {
     speed.add_css_class("stat-accent");
     speed.set_valign(gtk::Align::Center);
 
+    // Pause/resume all transfers (throttles the engine to a crawl, then lifts it). Wired in main.
+    let pause = gtk::ToggleButton::with_label("Pause");
+    pause.set_valign(gtk::Align::Center);
+    pause.set_tooltip_text(Some("Pause all transfers, then resume where they left off"));
+
     header.append(&titles);
     header.append(&speed);
+    header.append(&pause);
     header.set_margin_bottom(6);
 
     let list = gtk::ListBox::new();
@@ -52,7 +58,7 @@ pub fn page() -> (gtk::Widget, gtk::Label, gtk::ListBox) {
     col.append(&list);
     scroll.set_child(Some(&col));
     clamp.set_child(Some(&scroll));
-    (clamp.upcast(), speed, list)
+    (clamp.upcast(), speed, list, pause)
 }
 
 /// Start the live poll. Runs for the app's lifetime; only touches the daemon when it exists.
