@@ -139,7 +139,20 @@ impl Syncthingd {
         daemon
             .await_ready()
             .context("syncthing did not become ready in time")?;
+        // Where folders a peer shares get auto-accepted, so an incoming share lands somewhere clear
+        // (next to the mounts) instead of a surprise path. Best-effort.
+        let _ = daemon.set_default_folder_path();
         Ok(daemon)
+    }
+
+    /// Point auto-accepted (incoming) shares at `$HOME/Oortery/Peers`, so a folder a peer shares has
+    /// a clear, predictable home. Best-effort: a failure here never stops the daemon starting.
+    fn set_default_folder_path(&self) -> Result<()> {
+        if let Ok(home) = std::env::var("HOME") {
+            let path = format!("{home}/Oortery/Peers");
+            self.cli(&["config", "defaults", "folder", "path", "set", &path])?;
+        }
+        Ok(())
     }
 
     pub fn port(&self) -> u16 {
@@ -240,6 +253,44 @@ impl Syncthingd {
         Ok(())
     }
 
+    /// Devices that have asked to connect to us (they added our code; we have not added theirs yet).
+    /// Surfacing these lets a one-way scan work: the peer scans our QR, then appears here to accept.
+    pub fn pending_devices(&self) -> Result<Vec<PendingDevice>> {
+        let out = self.cli(&["show", "pending", "devices"])?;
+        let v: serde_json::Value = serde_json::from_str(&out).context("parsing pending devices")?;
+        let mut list = Vec::new();
+        if let Some(obj) = v.as_object() {
+            for (id, info) in obj {
+                let name = info
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                list.push(PendingDevice {
+                    id: id.clone(),
+                    name,
+                });
+            }
+        }
+        Ok(list)
+    }
+
+    /// The device IDs we are currently connected to (from `show connections`), so the UI can show a
+    /// peer as live rather than merely configured.
+    pub fn connected_ids(&self) -> Result<Vec<String>> {
+        let out = self.cli(&["show", "connections"])?;
+        let v: serde_json::Value = serde_json::from_str(&out).context("parsing connections")?;
+        let mut list = Vec::new();
+        if let Some(conns) = v.get("connections").and_then(|c| c.as_object()) {
+            for (id, info) in conns {
+                if info.get("connected").and_then(|c| c.as_bool()) == Some(true) {
+                    list.push(id.clone());
+                }
+            }
+        }
+        Ok(list)
+    }
+
     /// The peer device IDs configured here (everyone except ourselves).
     pub fn peer_ids(&self) -> Result<Vec<String>> {
         let me = self.device_id().unwrap_or_default();
@@ -250,6 +301,12 @@ impl Syncthingd {
             .filter(|l| !l.is_empty() && *l != me)
             .collect())
     }
+}
+
+/// A device that has asked to connect (it added our code). Accept it by adding it as a peer.
+pub struct PendingDevice {
+    pub id: String,
+    pub name: String,
 }
 
 /// True if `s` looks like a Syncthing device ID: uppercase alphanumeric in dash-grouped runs,

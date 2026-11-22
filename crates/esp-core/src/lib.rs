@@ -43,7 +43,7 @@ pub use jobs::{
     Job, Schedule, SyncMode,
 };
 pub use lock::{clear_lock, lock_enabled, set_lock, verify as verify_lock};
-pub use p2p::{syncthing_path, Syncthingd};
+pub use p2p::{syncthing_path, PendingDevice, Syncthingd};
 pub use portable::{export_bundle, import_bundle, ImportResult};
 pub use preflight::{scan_dir, Hazard, Issue};
 pub use settings::{

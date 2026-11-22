@@ -42,7 +42,9 @@ pub fn page() -> PeersPage {
     col.append(&sub);
 
     // This device: a QR to scan from a phone, plus the code to copy.
-    let me_group = adw::PreferencesGroup::builder().title("This device").build();
+    let me_group = adw::PreferencesGroup::builder()
+        .title("This device")
+        .build();
     let qr = gtk::DrawingArea::new();
     qr.set_content_width(200);
     qr.set_content_height(200);
@@ -161,8 +163,19 @@ pub fn refresh(ui: &Rc<Ui>) {
                 *ui.syncthingd.borrow_mut() = Some(d.clone());
                 ui.peers_started.set(true);
                 populate(&ui, &d);
+                // Poll so an incoming "wants to connect" request (a phone that scanned our QR) and
+                // live connection status appear on their own, without the user re-opening the page.
+                let (ui_poll, d_poll) = (ui.clone(), d.clone());
+                glib::timeout_add_seconds_local(4, move || {
+                    if ui_poll.window.is_visible() {
+                        populate(&ui_poll, &d_poll);
+                    }
+                    glib::ControlFlow::Continue
+                });
             }
-            Ok(Err(e)) => ui.peers_id.set_text(&format!("Could not start the P2P engine: {e}")),
+            Ok(Err(e)) => ui
+                .peers_id
+                .set_text(&format!("Could not start the P2P engine: {e}")),
             Err(_) => {}
         }
     });
@@ -191,23 +204,66 @@ fn populate(ui: &Rc<Ui>, daemon: &Rc<esp_core::Syncthingd>) {
     while let Some(child) = ui.peers_list.first_child() {
         ui.peers_list.remove(&child);
     }
+
+    // Incoming requests first: a device that scanned our code shows up here to accept with one tap.
+    let pending = daemon.pending_devices().unwrap_or_default();
+    for p in &pending {
+        let title = if p.name.is_empty() {
+            short_id(&p.id)
+        } else {
+            p.name.clone()
+        };
+        let row = adw::ActionRow::builder()
+            .title(&title)
+            .subtitle("Wants to connect")
+            .build();
+        row.add_prefix(&gtk::Image::from_icon_name("emblem-shared-symbolic"));
+        let accept = gtk::Button::with_label("Accept");
+        accept.add_css_class("suggested-action");
+        accept.set_valign(gtk::Align::Center);
+        let (ui2, id2, name2) = (ui.clone(), p.id.clone(), title.clone());
+        accept.connect_clicked(move |_| {
+            if let Some(d) = ui2.syncthingd.borrow().as_ref().cloned() {
+                match d.add_peer(&id2, &name2) {
+                    Ok(()) => {
+                        populate(&ui2, &d);
+                        ui2.toast(&format!("Connected to {name2}"));
+                    }
+                    Err(e) => ui2.error(&format!("Could not accept: {e}")),
+                }
+            }
+        });
+        row.add_suffix(&accept);
+        ui.peers_list.append(&row);
+    }
+
     let peers = daemon.peer_ids().unwrap_or_default();
-    if peers.is_empty() {
+    let connected = daemon.connected_ids().unwrap_or_default();
+    if peers.is_empty() && pending.is_empty() {
         let row = adw::ActionRow::builder()
             .title("No devices yet")
-            .subtitle("Add a device by its code, or scan this one from your phone.")
+            .subtitle("Scan this code from your phone, or add a device by its code.")
             .build();
         row.add_prefix(&gtk::Image::from_icon_name("phone-symbolic"));
         ui.peers_list.append(&row);
         return;
     }
     for pid in peers {
-        let short = short_id(&pid);
+        let live = connected.contains(&pid);
         let row = adw::ActionRow::builder()
-            .title(&short)
-            .subtitle("Paired")
+            .title(short_id(&pid))
+            .subtitle(if live {
+                "Connected"
+            } else {
+                "Not connected yet"
+            })
             .build();
-        row.add_prefix(&gtk::Image::from_icon_name("computer-symbolic"));
+        let icon = if live {
+            "network-transmit-receive-symbolic"
+        } else {
+            "computer-symbolic"
+        };
+        row.add_prefix(&gtk::Image::from_icon_name(icon));
         let share = gtk::Button::with_label("Share a folder");
         share.set_valign(gtk::Align::Center);
         let (ui2, pid2) = (ui.clone(), pid.clone());
@@ -219,7 +275,9 @@ fn populate(ui: &Rc<Ui>, daemon: &Rc<esp_core::Syncthingd>) {
 
 /// Dialog to pair a device by its code and a friendly name.
 pub fn add_device_dialog(ui: &Rc<Ui>) {
-    let name = adw::EntryRow::builder().title("Name (e.g. My phone)").build();
+    let name = adw::EntryRow::builder()
+        .title("Name (e.g. My phone)")
+        .build();
     let code = adw::EntryRow::builder().title("Device code").build();
     let list = gtk::ListBox::new();
     list.add_css_class("boxed-list");
@@ -243,12 +301,19 @@ pub fn add_device_dialog(ui: &Rc<Ui>) {
         if resp != "add" {
             return;
         }
-        let (n, c) = (name.text().trim().to_string(), code.text().trim().to_string());
+        let (n, c) = (
+            name.text().trim().to_string(),
+            code.text().trim().to_string(),
+        );
         if c.is_empty() {
             ui2.error("Paste the other device's code.");
             return;
         }
-        let label = if n.is_empty() { "A device".to_string() } else { n };
+        let label = if n.is_empty() {
+            "A device".to_string()
+        } else {
+            n
+        };
         let daemon = match ui2.ensure_syncthingd() {
             Ok(d) => d,
             Err(e) => {
@@ -277,31 +342,27 @@ fn share_folder_dialog(ui: &Rc<Ui>, peer_id: &str) {
         chooser.set_initial_folder(Some(&gtk::gio::File::for_path(dir)));
     }
     let (ui2, peer) = (ui.clone(), peer_id.to_string());
-    chooser.select_folder(
-        Some(&ui.window),
-        gtk::gio::Cancellable::NONE,
-        move |res| {
-            let Ok(file) = res else { return };
-            let Some(path) = file.path() else { return };
-            let path = path.to_string_lossy().into_owned();
-            let label = std::path::Path::new(&path)
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "Shared".to_string());
-            let folder_id = folder_id_for(&path);
-            let daemon = match ui2.syncthingd.borrow().as_ref().cloned() {
-                Some(d) => d,
-                None => {
-                    ui2.error("The P2P engine is not running.");
-                    return;
-                }
-            };
-            match daemon.share_folder(&folder_id, &label, &path, &peer) {
-                Ok(()) => ui2.toast(&format!("Sharing \u{201c}{label}\u{201d}")),
-                Err(e) => ui2.error(&format!("Could not share that folder: {e}")),
+    chooser.select_folder(Some(&ui.window), gtk::gio::Cancellable::NONE, move |res| {
+        let Ok(file) = res else { return };
+        let Some(path) = file.path() else { return };
+        let path = path.to_string_lossy().into_owned();
+        let label = std::path::Path::new(&path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Shared".to_string());
+        let folder_id = folder_id_for(&path);
+        let daemon = match ui2.syncthingd.borrow().as_ref().cloned() {
+            Some(d) => d,
+            None => {
+                ui2.error("The P2P engine is not running.");
+                return;
             }
-        },
-    );
+        };
+        match daemon.share_folder(&folder_id, &label, &path, &peer) {
+            Ok(()) => ui2.toast(&format!("Sharing \u{201c}{label}\u{201d}")),
+            Err(e) => ui2.error(&format!("Could not share that folder: {e}")),
+        }
+    });
 }
 
 /// A stable, path-derived folder id so re-sharing the same folder reuses one Syncthing entry.
