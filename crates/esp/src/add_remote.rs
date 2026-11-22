@@ -210,7 +210,7 @@ fn oauth_page(
                 Ok(Err(e)) => {
                     btn2.set_sensitive(true);
                     btn2.set_label(&format!("Sign in with {pretty2}"));
-                    ui3.toast(&format!("Sign-in did not finish: {e}"));
+                    ui3.error(&format!("Sign-in did not finish: {e}"));
                 }
                 Err(_) => {
                     btn2.set_sensitive(true);
@@ -278,7 +278,7 @@ fn config_value_page(
                 refresh(&ui2);
                 ui2.toast(&format!("Added {name}"));
             }
-            Err(e) => ui2.toast(&format!("Could not add: {e}")),
+            Err(e) => ui2.error(&format!("Could not add: {e}")),
         }
     });
 }

@@ -119,6 +119,9 @@ fn export_settings(ui: &Rc<Ui>) {
         .title("Export Oortery settings")
         .initial_name("oortery-settings.json")
         .build();
+    if let Some(dir) = crate::default_save_dir() {
+        chooser.set_initial_folder(Some(&gio::File::for_path(dir)));
+    }
     let ui = ui.clone();
     let win = ui.window.clone();
     chooser.save(Some(&win), gio::Cancellable::NONE, move |res| {

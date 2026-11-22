@@ -9,6 +9,7 @@ mod activity;
 mod add_remote;
 mod backups;
 mod constellation;
+mod diagnostics;
 mod folder_browser;
 mod lockscreen;
 mod mounts;
@@ -56,7 +57,17 @@ pub struct Ui {
 
 impl Ui {
     pub fn toast(&self, msg: &str) {
+        esp_core::diag::info(msg);
         self.toasts.add_toast(adw::Toast::new(msg));
+    }
+
+    /// A failure message: recorded at Error level in the diagnostics log (which the user can copy or
+    /// save to send us) and shown with a longer, more noticeable toast so it is not missed.
+    pub fn error(&self, msg: &str) {
+        esp_core::diag::error(msg);
+        let t = adw::Toast::new(msg);
+        t.set_timeout(8);
+        self.toasts.add_toast(t);
     }
 
     /// The shared operations daemon, starting it on first use.
@@ -152,6 +163,14 @@ pub fn update_overview(ui: &Rc<Ui>) {
 
 /// Prepend this executable's own directory to PATH, so a bundled rclone/restic (shipped beside
 /// the binary in a Flatpak/AppImage) is found even when the launcher leaves it off PATH.
+/// A sensible default folder for saving or exporting a file: the user's Downloads if it exists,
+/// otherwise their home. OS-aware via `esp_core::home_dir`.
+pub fn default_save_dir() -> Option<std::path::PathBuf> {
+    let home = esp_core::home_dir()?;
+    let downloads = home.join("Downloads");
+    Some(if downloads.is_dir() { downloads } else { home })
+}
+
 fn prefer_bundled_tools() {
     let Ok(exe) = std::env::current_exe() else {
         return;
@@ -191,6 +210,10 @@ fn main() -> glib::ExitCode {
     // Oortery always wears its night sky. Clear any inherited GTK_THEME (an AppImage launcher,
     // or a user's shell) before GTK starts, so nothing overrides our forced dark scheme.
     std::env::remove_var("GTK_THEME");
+
+    // Start a fresh diagnostics log for this session (local only, never transmitted).
+    esp_core::diag::start_session();
+    esp_core::diag::info("Oortery started");
 
     let app = adw::Application::builder().application_id(APP_ID).build();
     app.connect_startup(|_| {
@@ -468,6 +491,10 @@ fn build_ui(app: &adw::Application) {
     about_item.add_css_class("flat");
     about_item.set_halign(gtk::Align::Fill);
     menu_box.append(&about_item);
+    let diag_item = gtk::Button::with_label("Diagnostics");
+    diag_item.add_css_class("flat");
+    diag_item.set_halign(gtk::Align::Fill);
+    menu_box.append(&diag_item);
     let menu_pop = gtk::Popover::new();
     menu_pop.set_child(Some(&menu_box));
     menu_btn.set_popover(Some(&menu_pop));
@@ -591,6 +618,13 @@ fn build_ui(app: &adw::Application) {
             prefs::present(&ui_s);
         });
     }
+    {
+        let (ui_d, pop) = (ui.clone(), menu_pop.clone());
+        diag_item.connect_clicked(move |_| {
+            pop.popdown();
+            diagnostics::present(&ui_d);
+        });
+    }
 
     let ui_for_add = ui.clone();
     add_btn.connect_clicked(move |_| add_remote::present(&ui_for_add));
@@ -631,6 +665,11 @@ fn build_ui(app: &adw::Application) {
     // Headless aid: auto-open the new-backup dialog for screenshots.
     if aid("ESP_BACKUP_DIALOG").is_some() {
         backups::present_new(&ui, None);
+    }
+    // Headless aid: auto-open the Diagnostics dialog for screenshots.
+    if aid("ESP_DIAG").is_some() {
+        esp_core::diag::error("Example error for the screenshot: could not reach the backend");
+        diagnostics::present(&ui);
     }
 }
 

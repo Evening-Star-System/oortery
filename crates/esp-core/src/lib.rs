@@ -13,6 +13,7 @@ pub mod autostart;
 pub mod backups;
 pub mod connect;
 pub mod dashboard;
+pub mod diag;
 pub mod engine;
 pub mod jobs;
 pub mod lock;
