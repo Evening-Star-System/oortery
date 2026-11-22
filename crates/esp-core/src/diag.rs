@@ -8,11 +8,14 @@
 
 use crate::jobs::{config_dir, now_unix};
 use std::collections::VecDeque;
-use std::io::Write;
 use std::sync::Mutex;
 
-/// How many recent entries to keep in memory (and roughly what the dialog shows).
-const CAP: usize = 500;
+/// How many recent entries to keep (in memory AND on disk; the file mirrors the ring so it never
+/// grows without bound over a long session).
+const CAP: usize = 400;
+/// Longest a single message is kept; a giant engine error is truncated so one entry cannot bloat
+/// the log. The full text is still shown in the toast when it happens.
+const MAX_MSG: usize = 1_000;
 
 /// Severity of a logged event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,37 +61,48 @@ pub fn start_session() {
     }
 }
 
-fn append_to_file(entry: &LogEntry) {
+/// One formatted log line.
+fn format_entry(e: &LogEntry) -> String {
+    format!("{}  {}  {}", fmt_time(e.time), e.level.tag(), e.msg)
+}
+
+/// Mirror the whole (capped) ring to the on-disk file, so the file stays bounded to CAP entries
+/// rather than appending for the life of the session. Best effort; a write failure is not fatal.
+fn write_file(text: &str) {
     if let Some(p) = log_path() {
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&p)
-        {
-            let _ = writeln!(
-                f,
-                "{}  {}  {}",
-                fmt_time(entry.time),
-                entry.level.tag(),
-                entry.msg
-            );
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
         }
+        let _ = std::fs::write(&p, text.as_bytes());
     }
 }
 
-/// Record an event. Thread-safe, so worker threads can log too.
+/// Keep at most `MAX_MSG` characters of a message, on a char boundary, with a marker when cut.
+fn clamp(msg: String) -> String {
+    if msg.chars().count() <= MAX_MSG {
+        return msg;
+    }
+    let cut: String = msg.chars().take(MAX_MSG).collect();
+    format!("{cut} [...truncated]")
+}
+
+/// Record an event. Thread-safe, so worker threads can log too. The on-disk file is rewritten from
+/// the capped ring each time, so both the memory log and the file stay bounded.
 pub fn record(level: Level, msg: impl Into<String>) {
     let entry = LogEntry {
         time: now_unix(),
         level,
-        msg: msg.into(),
+        msg: clamp(msg.into()),
     };
-    append_to_file(&entry);
-    let mut log = LOG.lock().unwrap_or_else(|e| e.into_inner());
-    if log.len() >= CAP {
-        log.pop_front();
-    }
-    log.push_back(entry);
+    let text = {
+        let mut log = LOG.lock().unwrap_or_else(|e| e.into_inner());
+        if log.len() >= CAP {
+            log.pop_front();
+        }
+        log.push_back(entry);
+        log.iter().map(format_entry).collect::<Vec<_>>().join("\n")
+    };
+    write_file(&text);
 }
 
 pub fn info(msg: impl Into<String>) {
@@ -112,7 +126,7 @@ pub fn entries() -> Vec<LogEntry> {
 pub fn export_text() -> String {
     entries()
         .iter()
-        .map(|e| format!("{}  {}  {}", fmt_time(e.time), e.level.tag(), e.msg))
+        .map(format_entry)
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -161,5 +175,38 @@ mod tests {
     fn fmt_time_is_hms() {
         assert_eq!(fmt_time(3_661), "01:01:01");
         assert_eq!(fmt_time(0), "00:00:00");
+    }
+
+    #[test]
+    fn ring_and_file_stay_bounded() {
+        let _env = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("oortery-diag-cap-{}", std::process::id()));
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        start_session();
+
+        for i in 0..(CAP + 50) {
+            info(format!("entry {i}"));
+        }
+        // The ring is capped and the file mirrors it, so neither grows past CAP.
+        assert_eq!(entries().len(), CAP);
+        let lines = std::fs::read_to_string(dir.join("oortery/diagnostics.log"))
+            .unwrap()
+            .lines()
+            .count();
+        assert_eq!(lines, CAP);
+        // The oldest entries were dropped; the newest survive.
+        assert!(export_text().contains(&format!("entry {}", CAP + 49)));
+        assert!(!export_text().contains("entry 0 "));
+
+        // A giant message is clamped.
+        error("x".repeat(MAX_MSG * 3));
+        let last = entries().last().unwrap().msg.clone();
+        assert!(last.len() < MAX_MSG * 3 && last.ends_with("[...truncated]"));
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
