@@ -49,6 +49,8 @@ pub struct Ui {
     pub health_icon: gtk::Image,
     pub health_text: gtk::Label,
     pub health_sub: gtk::Label,
+    /// The account-free sovereignty strip: "No account, ever - N places - M devices - X safeguarded".
+    pub sovereignty_label: gtk::Label,
     pub last_backup_label: gtk::Label,
     pub coverage_label: gtk::Label,
     pub overview_onboarding: gtk::Box,
@@ -201,6 +203,31 @@ pub fn update_overview(ui: &Rc<Ui>) {
         None => "Your data is not backed up yet".to_string(),
     };
     ui.health_sub.set_text(&sub);
+
+    // The account-free sovereignty strip. "No account, ever" always leads (the promise holds even
+    // before anything is set up); the live counts and the cumulative protected total join as they
+    // exist, so the line grows with the user instead of showing empty zeros.
+    let sv = esp_core::sovereignty();
+    let mut parts = vec!["No account, ever".to_string()];
+    parts.push(format!(
+        "{} {}",
+        sv.remotes,
+        if sv.remotes == 1 { "place" } else { "places" }
+    ));
+    if sv.devices > 0 {
+        parts.push(format!(
+            "{} {}",
+            sv.devices,
+            if sv.devices == 1 { "device" } else { "devices" }
+        ));
+    }
+    if sv.protected_bytes > 0 {
+        parts.push(format!(
+            "{} safeguarded",
+            crate::syncs::human_bytes(sv.protected_bytes as i64)
+        ));
+    }
+    ui.sovereignty_label.set_text(&parts.join("  \u{00b7}  "));
 
     // Tiles.
     ui.last_backup_label.set_text(
@@ -668,6 +695,7 @@ fn build_ui(app: &adw::Application) {
         health_icon: ov.health_icon,
         health_text: ov.health_text,
         health_sub: ov.health_sub,
+        sovereignty_label: ov.sovereignty,
         last_backup_label: ov.last_backup,
         coverage_label: ov.coverage,
         overview_onboarding: ov.onboarding,
@@ -856,6 +884,7 @@ struct OverviewWidgets {
     health_icon: gtk::Image,
     health_text: gtk::Label,
     health_sub: gtk::Label,
+    sovereignty: gtk::Label,
     last_backup: gtk::Label,
     coverage: gtk::Label,
     remotes: gtk::Label,
@@ -899,6 +928,16 @@ fn overview_page(node_count: &Rc<Cell<usize>>) -> OverviewWidgets {
     health_banner.append(&health_icon);
     health_banner.append(&health_texts);
     col.append(&health_banner);
+
+    // The account-free sovereignty strip, right under the verdict: Oortery's whole promise as one
+    // honest line. "No account, ever" leads; the live counts and the cumulative protected total
+    // follow. Filled in update_overview.
+    let sovereignty = gtk::Label::new(None);
+    sovereignty.add_css_class("dim");
+    sovereignty.add_css_class("caption");
+    sovereignty.set_xalign(0.0);
+    sovereignty.set_wrap(true);
+    col.append(&sovereignty);
 
     // The living-sky hero: brand and awe, now secondary to the verdict above it.
     let hero = gtk::DrawingArea::new();
@@ -1008,6 +1047,7 @@ fn overview_page(node_count: &Rc<Cell<usize>>) -> OverviewWidgets {
         health_icon,
         health_text,
         health_sub,
+        sovereignty,
         last_backup,
         coverage,
         remotes,

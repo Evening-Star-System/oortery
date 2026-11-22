@@ -277,6 +277,8 @@ fn run_job(
             Ok(st) if st.finished => {
                 if st.success {
                     let _ = esp_core::runlog::record_success("sync", &job_id);
+                    // Tally what this sync moved to safety for the "protected by Oortery" total.
+                    let _ = esp_core::record_protected(stats.bytes.max(0) as u64);
                     done(format!("{name} finished"));
                 } else {
                     done(format!("{name} failed: {}", st.error));
@@ -407,7 +409,7 @@ pub(crate) fn run_detached(ui: &Rc<Ui>, job: &Job) {
     ui.refresh_active_count();
     ui.toast(&format!("Scheduled sync '{}' started", job.name));
 
-    let (ui_p, name, job_id) = (ui.clone(), job.name.clone(), job.id.clone());
+    let (ui_p, name, job_id, group_p) = (ui.clone(), job.name.clone(), job.id.clone(), group);
     glib::timeout_add_local(Duration::from_millis(400), move || {
         let Some(rcd) = ui_p.rcd.borrow().as_ref().cloned() else {
             return glib::ControlFlow::Break;
@@ -419,6 +421,9 @@ pub(crate) fn run_detached(ui: &Rc<Ui>, job: &Job) {
                 ui_p.refresh_active_count();
                 if st.success {
                     let _ = esp_core::runlog::record_success("sync", &job_id);
+                    // Tally what this scheduled sync moved to safety.
+                    let moved = rcd.job_stats(&group_p).bytes.max(0) as u64;
+                    let _ = esp_core::record_protected(moved);
                     ui_p.toast(&format!("Scheduled '{name}' finished"));
                 } else {
                     ui_p.toast(&format!("Scheduled '{name}' failed: {}", st.error));

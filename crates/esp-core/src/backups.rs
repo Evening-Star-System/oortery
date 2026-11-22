@@ -195,8 +195,8 @@ pub enum BackupPhase {
 /// it once and retry (P0 #5), and we never return success until a structural integrity check
 /// passes (P0 #3) so a partial/corrupt upload can never masquerade as a good backup.
 pub fn run_backup<F: FnMut(BackupPhase)>(job: &BackupJob, mut on: F) -> Result<String> {
-    let snapshot = match backup_once(job, &mut on) {
-        Ok(id) => id,
+    let (snapshot, data_added) = match backup_once(job, &mut on) {
+        Ok(out) => out,
         Err(e) if is_lock_error(&e.to_string()) => {
             // Stale lock: clear it and try exactly once more.
             unlock_repo(job).context("clearing a stale repository lock")?;
@@ -207,12 +207,17 @@ pub fn run_backup<F: FnMut(BackupPhase)>(job: &BackupJob, mut on: F) -> Result<S
     // Integrity gate: a backup is not "done" until the repository verifies.
     on(BackupPhase::Verifying);
     check_repo(job).context("verifying the backup after it was written")?;
+    // Tally what this snapshot added to the "protected by Oortery" total. Best-effort: a failure
+    // to record a vanity counter must never fail a verified backup.
+    let _ = crate::sovereignty::record_protected(data_added);
     Ok(snapshot)
 }
 
 /// One restic backup attempt. Reports `Backing` progress; does not verify or recover (see
 /// `run_backup`).
-fn backup_once<F: FnMut(BackupPhase)>(job: &BackupJob, on: &mut F) -> Result<String> {
+/// Returns the new snapshot id and the bytes restic actually added to the repo (`data_added`
+/// from its summary, 0 if absent), so the caller can tally what was moved to safety.
+fn backup_once<F: FnMut(BackupPhase)>(job: &BackupJob, on: &mut F) -> Result<(String, u64)> {
     let mut cmd = restic_cmd(job)?;
     cmd.arg("backup").arg("--json");
     // Skip anything the user excluded (build trees, caches). Blank patterns are ignored.
@@ -244,6 +249,7 @@ fn backup_once<F: FnMut(BackupPhase)>(job: &BackupJob, on: &mut F) -> Result<Str
 
     let stdout = child.stdout.take().expect("piped");
     let mut snapshot = String::new();
+    let mut data_added = 0u64;
     for line in BufReader::new(stdout).lines() {
         let line = line?;
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
@@ -259,6 +265,11 @@ fn backup_once<F: FnMut(BackupPhase)>(job: &BackupJob, on: &mut F) -> Result<Str
                 if let Some(id) = v.get("snapshot_id").and_then(|x| x.as_str()) {
                     snapshot = id.to_string();
                 }
+                // What this snapshot genuinely wrote to the repo (deduped/compressed), for the
+                // "protected by Oortery" tally. Absent on very old restic: treat as zero.
+                if let Some(n) = v.get("data_added").and_then(|x| x.as_u64()) {
+                    data_added = n;
+                }
             }
             _ => {}
         }
@@ -270,7 +281,7 @@ fn backup_once<F: FnMut(BackupPhase)>(job: &BackupJob, on: &mut F) -> Result<Str
         // Keep restic's own wording in the message so run_backup can spot a lock error.
         bail!("restic backup failed: {}", err.trim());
     }
-    Ok(snapshot)
+    Ok((snapshot, data_added))
 }
 
 /// The repo's snapshots, newest first.

@@ -25,6 +25,7 @@ pub mod preflight;
 pub mod presets;
 pub mod runlog;
 pub mod settings;
+pub mod sovereignty;
 pub mod stall;
 pub mod tuning;
 
@@ -43,14 +44,15 @@ pub use jobs::{
     Job, Schedule, SyncMode,
 };
 pub use lock::{clear_lock, lock_enabled, set_lock, verify as verify_lock};
-pub use p2p::{syncthing_path, PendingDevice, Syncthingd};
+pub use p2p::{paired_device_count, syncthing_path, PendingDevice, Syncthingd};
 pub use portable::{export_bundle, import_bundle, ImportResult};
 pub use preflight::{scan_dir, Hazard, Issue};
 pub use settings::{
     load_window_state, pref_bool, save_window_state, set_pref_bool, WindowState, KEEP_BACKGROUND,
 };
+pub use sovereignty::{load_protected, record_protected, sovereignty, Protected, Sovereignty};
 pub use stall::{StallTracker, DEFAULT_STALL_SECS};
-pub use tuning::{backend_of, tuning_for, Tuning};
+pub use tuning::{backend_of, mount_tuning_for, tuning_for, MountTuning, Tuning};
 
 /// Serializes tests that mutate process-global env (XDG_CONFIG_HOME, RCLONE_CONFIG). Cargo
 /// runs tests in parallel threads of one process, so without this two tests can read each

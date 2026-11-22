@@ -336,6 +336,37 @@ fn is_device_id(s: &str) -> bool {
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
 }
 
+/// Count the peer devices paired in the local Syncthing config, without starting the daemon.
+/// Reads `config.xml` and counts distinct valid device IDs, minus this device itself. Returns 0
+/// when P2P has never been set up (no config yet).
+///
+/// Robust to the file's formatting: each peer appears as a top-level `<device>` and again as a
+/// per-folder device reference with the SAME id, so counting distinct ids collapses the
+/// duplicates; the template device in `<defaults>` carries an empty id that `is_device_id`
+/// rejects. A config always holds this machine's own device, so paired peers = distinct ids - 1.
+pub fn paired_device_count() -> usize {
+    let Ok(home) = p2p_home() else {
+        return 0;
+    };
+    let Ok(xml) = std::fs::read_to_string(home.join("config.xml")) else {
+        return 0;
+    };
+    let needle = "device id=\"";
+    let mut ids = std::collections::BTreeSet::new();
+    let mut rest = xml.as_str();
+    while let Some(i) = rest.find(needle) {
+        rest = &rest[i + needle.len()..];
+        let Some(end) = rest.find('"') else { break };
+        let id = &rest[..end];
+        if is_device_id(id) {
+            ids.insert(id.to_string());
+        }
+        rest = &rest[end + 1..];
+    }
+    // The set always includes this machine's own device; the rest are paired peers.
+    ids.len().saturating_sub(1)
+}
+
 impl Drop for Syncthingd {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -398,6 +429,45 @@ mod tests {
         ));
         assert!(!is_device_id("nope"));
         assert!(!is_device_id("-rm -rf /")); // a flag-shaped value is not a device id
+    }
+
+    #[test]
+    fn paired_device_count_excludes_self_and_counts_distinct_peers() {
+        let _env = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("oortery-p2p-count-{}", std::process::id()));
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // No config yet: zero peers, not a panic.
+        assert_eq!(paired_device_count(), 0);
+
+        const SELF: &str = "ZO764NX-62BHV25-7ILX72U-3YLGNTX-ZM26HQI-5LJKX52-7XRMDAI-NRVDNQ3";
+        const PEER: &str = "EF7XNME-RXQ45CH-HYRKLCP-QWLG4AZ-NFBZG2U-2CWDMTU-6CHU2XC-26HNIAF";
+        // A config shaped like syncthing's: self + peer as top-level devices, the peer repeated as
+        // a per-folder device reference, and the empty-id template from <defaults>.
+        let xml = format!(
+            "<configuration version=\"52\">\n\
+             <device id=\"{SELF}\" name=\"me\"></device>\n\
+             <device id=\"{PEER}\" name=\"friend\"></device>\n\
+             <folder id=\"x\">\n\
+               <device id=\"{SELF}\"></device>\n\
+               <device id=\"{PEER}\"></device>\n\
+             </folder>\n\
+             <defaults><device id=\"\"></device></defaults>\n\
+             </configuration>"
+        );
+        let home = p2p_home().unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("config.xml"), xml).unwrap();
+
+        // Distinct valid ids = {self, peer}; minus self = one paired peer. The folder refs
+        // (duplicate ids) and the empty template id do not inflate the count.
+        assert_eq!(paired_device_count(), 1);
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
