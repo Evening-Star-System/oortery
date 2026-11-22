@@ -246,6 +246,9 @@ fn main() -> glib::ExitCode {
     app.connect_startup(|_| {
         // Oortery lives in a night sky: force the dark scheme so the look is consistent.
         adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
+        // Use our own icon (the static evening-star glyph) for the window, taskbar, and Activities,
+        // so it is not left to app-id/theme matching that can miss on some setups.
+        gtk::Window::set_default_icon_name(APP_ID);
         load_css();
     });
     app.connect_activate(build_ui);
