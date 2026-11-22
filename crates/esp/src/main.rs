@@ -782,7 +782,7 @@ fn overview_page(node_count: &Rc<Cell<usize>>) -> OverviewWidgets {
     let onboarding = gtk::Box::new(gtk::Orientation::Vertical, 10);
     onboarding.add_css_class("stat-card");
     onboarding.set_visible(false);
-    let ob_title = gtk::Label::new(Some("Welcome to Oortery"));
+    let ob_title = gtk::Label::new(Some("Welcome to the Oortery"));
     ob_title.add_css_class("title-3");
     ob_title.set_xalign(0.0);
     let ob_sub = gtk::Label::new(Some(

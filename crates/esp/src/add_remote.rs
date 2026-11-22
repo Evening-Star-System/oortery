@@ -8,6 +8,11 @@ use gtk::glib;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// The top providers shown under "Popular", by real-world popularity: the three big consumer clouds,
+/// a cheap object store, and a privacy-first cloud. A key is matched to an easy preset first (B2),
+/// else to the rclone provider of the same name (which decides OAuth vs form). Easy to re-order.
+const POPULAR: &[&str] = &["drive", "dropbox", "onedrive", "b2", "pcloud"];
+
 pub fn present(ui: &Rc<Ui>) {
     let dialog = adw::Dialog::builder()
         .title("Add a remote")
@@ -110,27 +115,49 @@ fn picker_page(
     scroll.set_vexpand(true);
     scroll.set_child(Some(&list));
 
-    // Stupid-easy presets for the common object stores, offered first so most people never touch
-    // the raw provider list.
+    // The handful of providers most people actually reach for, offered first so the long list is
+    // optional. OAuth clouds route to one-tap sign-in; the object store (B2) uses its easy preset
+    // form. Ordered by real-world popularity; trivial to re-order or extend.
     let popular = gtk::Label::new(Some("Popular"));
     popular.set_xalign(0.0);
     popular.add_css_class("heading");
     let presets_list = gtk::ListBox::new();
     presets_list.add_css_class("boxed-list");
     presets_list.set_selection_mode(gtk::SelectionMode::None);
-    for p in esp_core::presets::PRESETS {
-        let row = adw::ActionRow::builder()
-            .title(p.name)
-            .subtitle(p.blurb)
-            .activatable(true)
-            .build();
-        row.add_prefix(&gtk::Image::from_icon_name("folder-remote-symbolic"));
-        row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
-        let (ui2, nav2, dlg2) = (ui.clone(), nav.clone(), dialog.clone());
-        row.connect_activated(move |_| {
-            nav2.push(&preset_page(&ui2, p, &dlg2));
-        });
-        presets_list.append(&row);
+    for key in POPULAR {
+        // Prefer a stupid-easy preset if one exists for this key (e.g. B2); otherwise the provider.
+        if let Some(preset) = esp_core::presets::preset(key) {
+            let row = adw::ActionRow::builder()
+                .title(preset.name)
+                .subtitle(preset.blurb)
+                .activatable(true)
+                .build();
+            row.add_prefix(&gtk::Image::from_icon_name("folder-remote-symbolic"));
+            row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+            let (ui2, nav2, dlg2) = (ui.clone(), nav.clone(), dialog.clone());
+            row.connect_activated(move |_| {
+                nav2.push(&preset_page(&ui2, preset, &dlg2));
+            });
+            presets_list.append(&row);
+        } else if let Some(p) = ui.providers.iter().find(|p| &p.name == key).cloned() {
+            let subtitle = if p.needs_oauth() {
+                "Sign in with your browser"
+            } else {
+                "Fill in a short form"
+            };
+            let row = adw::ActionRow::builder()
+                .title(first_line(&p.description))
+                .subtitle(subtitle)
+                .activatable(true)
+                .build();
+            row.add_prefix(&gtk::Image::from_icon_name("folder-remote-symbolic"));
+            row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+            let (ui2, nav2, dlg2) = (ui.clone(), nav.clone(), dialog.clone());
+            row.connect_activated(move |_| {
+                nav2.push(&config_page(&ui2, &p, &dlg2));
+            });
+            presets_list.append(&row);
+        }
     }
     let all_label = gtk::Label::new(Some("Or pick any provider"));
     all_label.set_xalign(0.0);
