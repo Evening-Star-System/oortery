@@ -197,23 +197,7 @@ pub fn create_remote(name: &str, backend: &str, params: &[(String, String)]) -> 
     if name.starts_with('-') {
         anyhow::bail!("a remote name cannot begin with '-'");
     }
-    // Flags first, then `--`, then the positionals (name, type, key/value pairs). After `--` a
-    // value beginning with '-' is stored literally instead of being read as an rclone flag.
-    let mut args: Vec<String> = vec![
-        "config".into(),
-        "create".into(),
-        "--non-interactive".into(),
-        "--".into(),
-        name.into(),
-        backend.into(),
-    ];
-    for (k, v) in params {
-        if v.is_empty() {
-            continue;
-        }
-        args.push(k.clone());
-        args.push(v.clone());
-    }
+    let args = build_create_args(name, backend, params);
     let out = Command::new("rclone")
         .args(&args)
         .output()
@@ -225,6 +209,48 @@ pub fn create_remote(name: &str, backend: &str, params: &[(String, String)]) -> 
         );
     }
     Ok(())
+}
+
+/// Backend-specific default parameters, applied when the user did not set them. This gets ahead of
+/// known provider breakage (see the 2026-11-22 remote audit): Proton Drive's API rejects an absent
+/// or wrong `app_version`, and Linux users have no Proton desktop app to read their own value from,
+/// so the known-working macOS value is the safe default. Keep this list small and well-justified.
+pub fn backend_defaults(backend: &str) -> &'static [(&'static str, &'static str)] {
+    match backend {
+        "protondrive" => &[("app_version", "macos-drive@1.0.0-alpha.1")],
+        _ => &[],
+    }
+}
+
+/// Build the `rclone config create` argv: flags first, then `--`, then the positionals (name, type,
+/// key/value pairs). After `--`, a value beginning with '-' is stored literally instead of being
+/// read as an rclone flag. User-supplied values win; backend defaults fill only what is unset.
+/// Separated out so the exact command (including the injected defaults) is unit-testable.
+fn build_create_args(name: &str, backend: &str, params: &[(String, String)]) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "config".into(),
+        "create".into(),
+        "--non-interactive".into(),
+        "--".into(),
+        name.into(),
+        backend.into(),
+    ];
+    let mut provided = std::collections::HashSet::new();
+    for (k, v) in params {
+        if v.is_empty() {
+            continue;
+        }
+        provided.insert(k.as_str());
+        args.push(k.clone());
+        args.push(v.clone());
+    }
+    for (k, v) in backend_defaults(backend) {
+        if !provided.contains(k) {
+            args.push((*k).to_string());
+            args.push((*v).to_string());
+        }
+    }
+    args
 }
 
 /// Delete a configured remote.
@@ -349,6 +375,28 @@ pub fn backend_label(backend: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proton_gets_a_default_app_version_unless_set() {
+        // Proton with no app_version: the known-working default is injected.
+        let args = build_create_args("p", "protondrive", &[("username".into(), "u".into())]);
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("app_version macos-drive@1.0.0-alpha.1"),
+            "args: {joined}"
+        );
+        // A user-supplied app_version wins (no duplicate, their value kept).
+        let args = build_create_args(
+            "p",
+            "protondrive",
+            &[("app_version".into(), "custom@9".into())],
+        );
+        assert_eq!(args.iter().filter(|a| *a == "app_version").count(), 1);
+        assert!(args.iter().any(|a| a == "custom@9"));
+        // A non-Proton backend gets no injected defaults.
+        let args = build_create_args("s", "s3", &[("provider".into(), "AWS".into())]);
+        assert!(!args.iter().any(|a| a == "app_version"));
+    }
 
     #[test]
     fn providers_enumerate_when_rclone_present() {
