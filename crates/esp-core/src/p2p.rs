@@ -24,10 +24,12 @@ fn p2p_home() -> Result<PathBuf> {
     Ok(config_dir()?.join("syncthing"))
 }
 
-/// Ensure a syncthing home exists, generating the device key + config on first use.
+/// Ensure a syncthing home exists, generating the device key + config on first use and turning
+/// off Syncthing's phone-home defaults before the daemon ever runs.
 fn ensure_home() -> Result<PathBuf> {
     let home = p2p_home()?;
-    if !home.join("config.xml").exists() {
+    let config = home.join("config.xml");
+    if !config.exists() {
         std::fs::create_dir_all(&home)?;
         let out = Command::new("syncthing")
             .arg("generate")
@@ -41,8 +43,43 @@ fn ensure_home() -> Result<PathBuf> {
                 String::from_utf8_lossy(&out.stderr).trim()
             );
         }
+        harden_config(&config)?;
     }
     Ok(home)
+}
+
+/// Set the inner text of the first `<tag>...</tag>` in a freshly generated config (each option
+/// appears once with a simple scalar value). Leaves the document untouched if the tag is absent.
+fn set_xml_tag(xml: &str, tag: &str, value: &str) -> String {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    match (xml.find(&open), xml.find(&close)) {
+        (Some(s), Some(e)) if s + open.len() <= e => {
+            let mut out = String::with_capacity(xml.len());
+            out.push_str(&xml[..s + open.len()]);
+            out.push_str(value);
+            out.push_str(&xml[e..]);
+            out
+        }
+        _ => xml.to_string(),
+    }
+}
+
+/// Turn off Syncthing's phone-home defaults on a freshly generated config, before the daemon ever
+/// runs. Oortery is offline-first and account-free, so no global discovery server, no relay
+/// servers, no crash or usage reporting, and no auto-upgrade check. LOCAL (LAN) discovery stays on,
+/// since that is how device-to-device pairing finds peers with no third party in the middle. Global
+/// discovery and relays will become an explicit, disclosed opt-in when the P2P UI is built.
+fn harden_config(config: &Path) -> Result<()> {
+    let xml = std::fs::read_to_string(config).context("reading syncthing config to harden")?;
+    let xml = set_xml_tag(&xml, "globalAnnounceEnabled", "false");
+    let xml = set_xml_tag(&xml, "relaysEnabled", "false");
+    let xml = set_xml_tag(&xml, "startBrowser", "false");
+    let xml = set_xml_tag(&xml, "autoUpgradeIntervalH", "0");
+    let xml = set_xml_tag(&xml, "crashReportingEnabled", "false");
+    let xml = set_xml_tag(&xml, "urAccepted", "-1");
+    std::fs::write(config, xml).context("writing hardened syncthing config")?;
+    Ok(())
 }
 
 /// Read the GUI API key from syncthing's config. Never logged or returned to the UI.
@@ -170,6 +207,45 @@ fn free_loopback_port() -> Result<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_xml_tag_replaces_the_value() {
+        let xml = "<opts><globalAnnounceEnabled>true</globalAnnounceEnabled></opts>";
+        assert_eq!(
+            set_xml_tag(xml, "globalAnnounceEnabled", "false"),
+            "<opts><globalAnnounceEnabled>false</globalAnnounceEnabled></opts>"
+        );
+        // An absent tag leaves the document untouched.
+        assert_eq!(set_xml_tag(xml, "missing", "x"), xml);
+    }
+
+    #[test]
+    fn generated_config_disables_phone_home() {
+        if syncthing_path().is_none() {
+            eprintln!("syncthing not installed; skipping");
+            return;
+        }
+        let _env = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("oortery-p2p-harden-{}", std::process::id()));
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let home = ensure_home().expect("ensure home");
+        let cfg = std::fs::read_to_string(home.join("config.xml")).unwrap();
+        // The phone-home defaults are all off before the daemon ever runs.
+        assert!(cfg.contains("<globalAnnounceEnabled>false</globalAnnounceEnabled>"));
+        assert!(cfg.contains("<relaysEnabled>false</relaysEnabled>"));
+        assert!(cfg.contains("<crashReportingEnabled>false</crashReportingEnabled>"));
+        assert!(cfg.contains("<autoUpgradeIntervalH>0</autoUpgradeIntervalH>"));
+        assert!(cfg.contains("<urAccepted>-1</urAccepted>"));
+        // LAN discovery stays ON: that is how pairing finds peers with no third party involved.
+        assert!(cfg.contains("<localAnnounceEnabled>true</localAnnounceEnabled>"));
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn syncthingd_starts_and_reports_a_device_id() {
