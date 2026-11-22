@@ -190,6 +190,73 @@ impl Syncthingd {
             .map(String::from)
             .context("no myID in syncthing system status")
     }
+
+    /// Pair a peer device by its Syncthing ID, under a friendly `name`. The peer is set to
+    /// auto-accept folders, so after pairing a folder the peer shares simply appears here: the
+    /// user never has to approve each folder by hand (the stupid-simple half of pairing).
+    pub fn add_peer(&self, device_id: &str, name: &str) -> Result<()> {
+        let id = device_id.trim();
+        if !is_device_id(id) {
+            bail!("that does not look like a device code");
+        }
+        self.cli(&[
+            "config",
+            "devices",
+            "add",
+            "--device-id",
+            id,
+            "--name",
+            name,
+            "--auto-accept-folders",
+        ])?;
+        Ok(())
+    }
+
+    /// Share a local folder with a paired peer under a stable `folder_id`, creating the folder
+    /// entry on first use. Both devices sharing the same `folder_id` is what makes it sync.
+    pub fn share_folder(
+        &self,
+        folder_id: &str,
+        label: &str,
+        path: &str,
+        peer_id: &str,
+    ) -> Result<()> {
+        // Create the folder entry if it is not there yet; an already-present folder is fine.
+        let _ = self.cli(&[
+            "config", "folders", "add", "--id", folder_id, "--label", label, "--path", path,
+        ]);
+        self.cli(&[
+            "config",
+            "folders",
+            folder_id,
+            "devices",
+            "add",
+            "--device-id",
+            peer_id,
+        ])?;
+        Ok(())
+    }
+
+    /// The peer device IDs configured here (everyone except ourselves).
+    pub fn peer_ids(&self) -> Result<Vec<String>> {
+        let me = self.device_id().unwrap_or_default();
+        let out = self.cli(&["config", "devices", "list"])?;
+        Ok(out
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty() && *l != me)
+            .collect())
+    }
+}
+
+/// True if `s` looks like a Syncthing device ID: uppercase alphanumeric in dash-grouped runs,
+/// long enough to be real. A light guard before handing a value to the engine, not full validation.
+fn is_device_id(s: &str) -> bool {
+    let stripped: String = s.chars().filter(|c| *c != '-').collect();
+    stripped.len() >= 50
+        && stripped
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
 }
 
 impl Drop for Syncthingd {
@@ -242,6 +309,50 @@ mod tests {
         assert!(cfg.contains("<urAccepted>-1</urAccepted>"));
         // LAN discovery stays ON: that is how pairing finds peers with no third party involved.
         assert!(cfg.contains("<localAnnounceEnabled>true</localAnnounceEnabled>"));
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn is_device_id_guards_shape() {
+        assert!(is_device_id(
+            "EF7XNME-RXQ45CH-HYRKLCP-QWLG4AZ-NFBZG2U-2CWDMTU-6CHU2XC-26HNIAF"
+        ));
+        assert!(!is_device_id("nope"));
+        assert!(!is_device_id("-rm -rf /")); // a flag-shaped value is not a device id
+    }
+
+    #[test]
+    fn pairs_a_peer_and_shares_a_folder() {
+        if syncthing_path().is_none() {
+            eprintln!("syncthing not installed; skipping");
+            return;
+        }
+        let _env = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("oortery-p2p-pair-{}", std::process::id()));
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let daemon = Syncthingd::start().expect("start syncthing");
+        // A real, checksum-valid device id (device ids are public, not secrets).
+        const PEER: &str = "EF7XNME-RXQ45CH-HYRKLCP-QWLG4AZ-NFBZG2U-2CWDMTU-6CHU2XC-26HNIAF";
+        daemon.add_peer(PEER, "A Friend").expect("add peer");
+
+        let share = dir.join("shared");
+        std::fs::create_dir_all(&share).unwrap();
+        daemon
+            .share_folder("oort-test", "Test Share", share.to_str().unwrap(), PEER)
+            .expect("share folder");
+
+        // The peer is configured here now.
+        let peers = daemon.peer_ids().expect("peers");
+        assert!(peers.iter().any(|p| p == PEER), "peer missing: {peers:?}");
+        // A malformed id is refused before it ever reaches the engine.
+        assert!(daemon.add_peer("not-a-real-id", "x").is_err());
+        drop(daemon);
 
         std::env::remove_var("XDG_CONFIG_HOME");
         let _ = std::fs::remove_dir_all(&dir);
