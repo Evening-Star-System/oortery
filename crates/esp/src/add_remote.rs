@@ -263,7 +263,7 @@ fn config_value_page(
     let dlg2 = dialog.clone();
     let backend = provider.name.clone();
     let name_row2 = name_row.clone();
-    create.connect_clicked(move |_| {
+    create.connect_clicked(move |btn| {
         let name = name_row2.text().trim().to_string();
         if name.is_empty() {
             ui2.error("Give the remote a name.");
@@ -282,13 +282,36 @@ fn config_value_page(
             .iter()
             .map(|(k, _, e)| (k.clone(), e.text().to_string()))
             .collect();
-        match esp_core::create_remote(&name, &backend, &params) {
-            Ok(()) => {
-                dlg2.close();
-                refresh(&ui2);
-                ui2.toast(&format!("Added {name}"));
+
+        // Some backends (Proton, Internxt, Mega, ...) do a real network login at create time, which
+        // can take several seconds. Run it off the UI thread so the window never freezes; the button
+        // shows a connecting state and re-enables on failure.
+        btn.set_sensitive(false);
+        btn.set_label("Connecting...");
+        let (tx, rx) = async_channel::bounded(1);
+        let (n, b) = (name.clone(), backend.clone());
+        std::thread::spawn(move || {
+            let _ = tx
+                .send_blocking(esp_core::create_remote(&n, &b, &params).map_err(|e| e.to_string()));
+        });
+        let (ui_c, dlg_c, btn_c, name_c) = (ui2.clone(), dlg2.clone(), btn.clone(), name.clone());
+        glib::spawn_future_local(async move {
+            match rx.recv().await {
+                Ok(Ok(())) => {
+                    dlg_c.close();
+                    refresh(&ui_c);
+                    ui_c.toast(&format!("Added {name_c}"));
+                }
+                Ok(Err(e)) => {
+                    btn_c.set_sensitive(true);
+                    btn_c.set_label("Create");
+                    ui_c.error(&format!("Could not add: {e}"));
+                }
+                Err(_) => {
+                    btn_c.set_sensitive(true);
+                    btn_c.set_label("Create");
+                }
             }
-            Err(e) => ui2.error(&format!("Could not add: {e}")),
-        }
+        });
     });
 }
