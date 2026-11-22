@@ -5,16 +5,18 @@ use adw::prelude::*;
 use gtk::gio;
 use std::rc::Rc;
 
-/// The command an autostart entry should run: the AppImage path if we are one, else this binary.
+/// The command an autostart entry should run: the AppImage path if we are one, else this binary,
+/// with `--background` so the login launch starts quietly (hidden when background mode is on).
 fn autostart_exec() -> String {
-    std::env::var("APPIMAGE")
+    let bin = std::env::var("APPIMAGE")
         .ok()
         .or_else(|| {
             std::env::current_exe()
                 .ok()
                 .map(|p| p.to_string_lossy().into_owned())
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    format!("{bin} --background")
 }
 
 /// Present the Settings dialog over the main window.

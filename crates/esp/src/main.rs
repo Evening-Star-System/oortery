@@ -16,6 +16,7 @@ mod mounts;
 mod prefs;
 mod spinner;
 mod syncs;
+mod tray;
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
@@ -23,6 +24,10 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 const APP_ID: &str = "app.eveningstar.Oortery";
+
+/// Set when launched with `--background` (the autostart entry does this): start hidden, with no
+/// window popping up at login. Only actually hides when "Keep running in the background" is on.
+static START_BACKGROUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Shared, refreshable UI handles passed to dialogs and refresh logic.
 pub struct Ui {
@@ -264,7 +269,13 @@ fn main() -> glib::ExitCode {
             build_ui(app);
         }
     });
-    app.run()
+    // Pull out our own `--background` flag (so GApplication does not try to treat it as a file),
+    // remember it, and run with the rest.
+    let args: Vec<String> = std::env::args().collect();
+    let background = args.iter().any(|a| a == "--background");
+    START_BACKGROUND.store(background, std::sync::atomic::Ordering::Relaxed);
+    let forwarded: Vec<String> = args.into_iter().filter(|a| a != "--background").collect();
+    app.run_with_args(&forwarded)
 }
 
 fn load_css() {
@@ -706,7 +717,17 @@ fn build_ui(app: &adw::Application) {
     ov.protect_btn
         .connect_clicked(move |_| backups::present_new(&ui_protect, None));
 
-    window.present();
+    // At a login-time background start (autostart passes --background) with background mode on, stay
+    // hidden so nothing pops up; the mounts still restore and the window is one relaunch away.
+    let start_hidden = START_BACKGROUND.load(std::sync::atomic::Ordering::Relaxed)
+        && esp_core::pref_bool(esp_core::KEEP_BACKGROUND);
+    if !start_hidden {
+        window.present();
+    }
+
+    // A tray icon so the app is reachable while it runs in the background (degrades to nothing
+    // where there is no tray host, e.g. GNOME without the AppIndicator extension).
+    tray::setup(&ui);
 
     // Bring back whatever the user left mounted last time, so "stay mounted" survives restarts and
     // logins (paired with Start-at-login in Preferences). Quiet and best-effort.
