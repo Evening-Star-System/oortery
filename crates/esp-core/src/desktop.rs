@@ -151,8 +151,8 @@ mod linux {
 
         // A unique file per test (`name` must differ per caller) so parallel tests never share one.
         fn tmp(name: &str) -> PathBuf {
-            let dir = std::env::temp_dir()
-                .join(format!("esp-bookmarks-{}-{}", std::process::id(), name));
+            let dir =
+                std::env::temp_dir().join(format!("esp-bookmarks-{}-{}", std::process::id(), name));
             std::fs::create_dir_all(&dir).unwrap();
             dir.join("bookmarks")
         }

@@ -282,10 +282,22 @@ pub struct Mount {
 /// lives as long as the daemon does.
 pub fn mount(port: u16, fs: &str, mount_point: &str) -> Result<()> {
     prepare_mountpoint(mount_point)?;
+    // Tune the VFS/FUSE mount per backend so a file manager browsing a large folder over a slow
+    // backend (WebDAV, how Internxt is reached) does not storm the daemon and freeze. `fs` is
+    // "<remote>:<path>"; a bare local path (no remote prefix) resolves to the local backend,
+    // which gets no overrides. See tuning::mount_tuning_for.
+    let remote = fs.split(':').next().filter(|s| !s.is_empty());
+    let backend = crate::tuning::backend_of(port, remote);
+    let (vfs_opt, mount_opt) = crate::tuning::mount_tuning_for(&backend).as_rc_params();
     rc_at(
         port,
         "mount/mount",
-        serde_json::json!({ "fs": fs, "mountPoint": mount_point }),
+        serde_json::json!({
+            "fs": fs,
+            "mountPoint": mount_point,
+            "vfsOpt": vfs_opt,
+            "mountOpt": mount_opt,
+        }),
     )?;
     Ok(())
 }
