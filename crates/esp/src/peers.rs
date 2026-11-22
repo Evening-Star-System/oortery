@@ -59,31 +59,37 @@ pub fn page() -> PeersPage {
     qr_caption.set_wrap(true);
     qr_caption.set_justify(gtk::Justification::Center);
 
+    // The QR sits on a rounded white card so it reads as a scannable thing, not a floating square.
+    let qr_card = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    qr_card.add_css_class("qr-card");
+    qr_card.set_halign(gtk::Align::Center);
+    qr_card.append(&qr);
+
     let id_label = gtk::Label::new(Some("Starting the P2P engine\u{2026}"));
     id_label.add_css_class("monospace");
     id_label.set_wrap(true);
     id_label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
     id_label.set_selectable(true);
-    id_label.set_xalign(0.0);
+    id_label.set_justify(gtk::Justification::Center);
+    id_label.set_max_width_chars(34);
     let copy_btn = gtk::Button::from_icon_name("edit-copy-symbolic");
     copy_btn.set_tooltip_text(Some("Copy this device's code"));
     copy_btn.set_valign(gtk::Align::Center);
     copy_btn.add_css_class("flat");
-    let id_row = adw::ActionRow::builder().title("Your device code").build();
-    id_row.add_suffix(&copy_btn);
+    // The code lives in a bordered chip with the copy button, centered under the QR.
+    let code_chip = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    code_chip.add_css_class("code-chip");
+    code_chip.set_halign(gtk::Align::Center);
+    id_label.set_hexpand(true);
+    code_chip.append(&id_label);
+    code_chip.append(&copy_btn);
 
-    let me_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    me_box.append(&qr);
+    let me_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    me_box.set_halign(gtk::Align::Center);
+    me_box.append(&qr_card);
     me_box.append(&qr_caption);
+    me_box.append(&code_chip);
     me_group.add(&me_box);
-    me_group.add(&id_row);
-    // The selectable code sits under the row so it can wrap full-width.
-    let id_wrap = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    id_wrap.set_margin_start(6);
-    id_wrap.set_margin_end(6);
-    id_wrap.set_margin_bottom(6);
-    id_wrap.append(&id_label);
-    me_group.add(&id_wrap);
     col.append(&me_group);
 
     // Paired devices, with an Add button in the group header.

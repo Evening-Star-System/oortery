@@ -6,7 +6,7 @@ use crate::{syncs, Ui};
 use adw::prelude::*;
 use esp_core::StallTracker;
 use gtk::glib;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -71,6 +71,8 @@ pub fn start_polling(ui: &Rc<Ui>) {
         esp_core::DEFAULT_STALL_SECS,
     )));
     let started = Instant::now();
+    // Last P2P sample (cumulative bytes, time) so we can derive a live device-to-device rate.
+    let p2p_last: Rc<Cell<(i64, f64)>> = Rc::new(Cell::new((0, 0.0)));
     let ui = ui.clone();
 
     glib::timeout_add_local(Duration::from_millis(600), move || {
@@ -119,6 +121,47 @@ pub fn start_polling(ui: &Rc<Ui>) {
                 map.insert(t.name.clone(), (row, bar));
             }
         }
+        // Device-to-device (Syncthing) throughput, shown alongside cloud transfers. We have no
+        // per-folder percentage from the CLI, so this is a live rate from the connection totals; a
+        // pulsing bar conveys motion. The row appears only while data is actually flowing.
+        let p2p_key = "\u{0}peer-sync".to_string(); // reserved key; a real filename cannot contain NUL
+        let now_t = started.elapsed().as_secs_f64();
+        let mut p2p_rate = 0i64;
+        if let Some(d) = ui.syncthingd.borrow().as_ref().cloned() {
+            if let Ok(total) = d.transfer_bytes_total() {
+                let (last_total, last_t) = p2p_last.get();
+                let dt = now_t - last_t;
+                if last_t > 0.0 && dt > 0.0 && total >= last_total {
+                    p2p_rate = ((total - last_total) as f64 / dt) as i64;
+                }
+                p2p_last.set((total, now_t));
+            }
+        }
+        if p2p_rate > 1024 {
+            seen.insert(p2p_key.clone());
+            let sub = format!(
+                "Device-to-device \u{00b7} {}/s",
+                syncs::human_bytes(p2p_rate)
+            );
+            if let Some((row, bar)) = map.get(&p2p_key) {
+                row.set_subtitle(&sub);
+                bar.pulse();
+            } else {
+                let row = adw::ActionRow::builder()
+                    .title("Peer sync")
+                    .subtitle(&sub)
+                    .build();
+                row.add_prefix(&gtk::Image::from_icon_name("network-wireless-symbolic"));
+                let bar = gtk::ProgressBar::new();
+                bar.set_valign(gtk::Align::Center);
+                bar.set_width_request(160);
+                bar.pulse();
+                row.add_suffix(&bar);
+                ui.activity_list.append(&row);
+                map.insert(p2p_key.clone(), (row, bar));
+            }
+        }
+
         // Drop rows for transfers that finished.
         let gone: Vec<String> = map.keys().filter(|k| !seen.contains(*k)).cloned().collect();
         for k in gone {

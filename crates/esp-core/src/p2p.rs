@@ -275,6 +275,23 @@ impl Syncthingd {
         Ok(list)
     }
 
+    /// Cumulative bytes moved to and from peers (from `show connections`'s totals). The Activity
+    /// poll diffs this between samples to show a live P2P throughput, so device-to-device sync is
+    /// visible alongside cloud transfers.
+    pub fn transfer_bytes_total(&self) -> Result<i64> {
+        let out = self.cli(&["show", "connections"])?;
+        let v: serde_json::Value =
+            serde_json::from_str(&out).context("parsing connections totals")?;
+        let total = v.get("total");
+        let field = |k: &str| {
+            total
+                .and_then(|t| t.get(k))
+                .and_then(|n| n.as_i64())
+                .unwrap_or(0)
+        };
+        Ok(field("inBytesTotal") + field("outBytesTotal"))
+    }
+
     /// The device IDs we are currently connected to (from `show connections`), so the UI can show a
     /// peer as live rather than merely configured.
     pub fn connected_ids(&self) -> Result<Vec<String>> {

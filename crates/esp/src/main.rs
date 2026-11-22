@@ -317,6 +317,10 @@ fn load_css() {
         headerbar { background: alpha(#0c0a18, 0.72); box-shadow: none; }
 
         .hero { border-radius: 18px; }
+        /* Peers: a white card for the QR (so a phone camera reads it) and a bordered chip for the code. */
+        .qr-card { background: #ffffff; border-radius: 16px; padding: 12px; }
+        .code-chip { background: alpha(#b4baff, 0.08); border: 1px solid alpha(#b4baff, 0.22);
+                     border-radius: 12px; padding: 6px 8px 6px 12px; }
         .dim { opacity: 0.6; }
 
         /* The 'are we OK?' banner. Status is carried by an icon AND a tinted left edge + glow,
