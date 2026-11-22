@@ -178,6 +178,72 @@ fn mount(ui: &Rc<Ui>, name: &str) {
     });
 }
 
+/// Confirm removing a remote, then unmount it first if it is mounted (so the OS file manager updates
+/// and no stale mount lingers), delete its connection config, and refresh every page. Removing a
+/// remote never deletes the files in the cloud, only the connection here.
+pub(crate) fn confirm_remove_remote(ui: &Rc<Ui>, name: &str) {
+    let dialog = adw::AlertDialog::new(
+        Some(&format!("Remove {name}?")),
+        Some(
+            "This removes the connection, and unmounts it first if it is mounted. It does not delete \
+             any of your files in the cloud.",
+        ),
+    );
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("remove", "Remove");
+    dialog.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+    let (ui2, name2) = (ui.clone(), name.to_string());
+    dialog.connect_response(None, move |_, resp| {
+        if resp == "remove" {
+            remove_now(&ui2, &name2);
+        }
+    });
+    dialog.present(Some(&ui.window));
+}
+
+/// Unmount the remote if it is mounted, then delete its config and refresh everything.
+fn remove_now(ui: &Rc<Ui>, name: &str) {
+    let point = point_for(name);
+    let mounted = ui
+        .rcd
+        .borrow()
+        .as_ref()
+        .and_then(|rcd| esp_core::list_mounts(rcd.port()).ok())
+        .map(|ms| ms.into_iter().any(|m| m.mount_point == point))
+        .unwrap_or(false);
+
+    if mounted {
+        if let Some(rcd) = ui.rcd.borrow().as_ref().cloned() {
+            ui.toast(&format!("Unmounting {name}\u{2026}"));
+            let (tx, rx) = async_channel::bounded(1);
+            let (port, point_t) = (rcd.port(), point);
+            std::thread::spawn(move || {
+                let _ =
+                    tx.send_blocking(esp_core::unmount(port, &point_t).map_err(|e| e.to_string()));
+            });
+            let (ui_c, name_c) = (ui.clone(), name.to_string());
+            glib::spawn_future_local(async move {
+                let _ = rx.recv().await; // proceed whether or not the unmount reported success
+                finish_remove(&ui_c, &name_c);
+            });
+            return;
+        }
+    }
+    finish_remove(ui, name);
+}
+
+fn finish_remove(ui: &Rc<Ui>, name: &str) {
+    match esp_core::delete_remote(name) {
+        Ok(()) => {
+            crate::refresh_all(ui);
+            ui.toast(&format!("Removed {name}"));
+        }
+        Err(e) => ui.error(&format!("Could not remove {name}: {e}")),
+    }
+}
+
 fn unmount(ui: &Rc<Ui>, name: &str) {
     let Some(rcd) = ui.rcd.borrow().as_ref().cloned() else {
         refresh(ui);

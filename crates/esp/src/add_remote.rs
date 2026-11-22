@@ -2,7 +2,7 @@
 //! (Drive, Dropbox, OneDrive, ...) sign in with one tap in the browser; config-value
 //! backends (S3, SFTP, WebDAV, B2, and many more) fill a short form. Both end up connected.
 
-use crate::{refresh, Ui};
+use crate::Ui;
 use adw::prelude::*;
 use gtk::glib;
 use std::cell::RefCell;
@@ -227,7 +227,7 @@ fn oauth_page(
             match rx.recv().await {
                 Ok(Ok(())) => {
                     dlg3.close();
-                    refresh(&ui3);
+                    crate::refresh_all(&ui3);
                     ui3.toast(&format!("Connected to {pretty2}"));
                 }
                 Ok(Err(e)) => {
@@ -355,7 +355,7 @@ fn config_value_page(
             match rx.recv().await {
                 Ok(Ok(())) => {
                     dlg_c.close();
-                    refresh(&ui_c);
+                    crate::refresh_all(&ui_c);
                     ui_c.toast(&format!("Added {name_c}"));
                 }
                 Ok(Err(e)) => {

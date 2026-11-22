@@ -119,18 +119,7 @@ pub fn refresh(ui: &Rc<Ui>) {
             remove.add_css_class("flat");
             let (ui_r, name_r) = (ui.clone(), r.name.clone());
             remove.connect_clicked(move |_| {
-                let ui_c = ui_r.clone();
-                let name = name_r.clone();
-                let (ui_done, name_done) = (ui_c.clone(), name.clone());
-                syncs::confirm_delete(
-                    &ui_c,
-                    &name,
-                    "remote",
-                    move || match esp_core::delete_remote(&name_done) {
-                        Ok(()) => refresh(&ui_done),
-                        Err(e) => ui_done.error(&format!("Could not remove: {e}")),
-                    },
-                );
+                mounts::confirm_remove_remote(&ui_r, &name_r);
             });
             row.add_suffix(&remove);
             ui.remotes_list.append(&row);
@@ -139,6 +128,15 @@ pub fn refresh(ui: &Rc<Ui>) {
     ui.remotes_count.set_text(&remotes.len().to_string());
     ui.node_count.set(remotes.len().max(6));
     update_overview(ui);
+}
+
+/// Refresh every page that reflects remotes, so adding or removing one updates the whole app
+/// (Remotes, Mounts, Syncs, Backups, Overview) in one call, not just the page you are on.
+pub fn refresh_all(ui: &Rc<Ui>) {
+    refresh(ui);
+    mounts::refresh(ui);
+    syncs::refresh(ui);
+    backups::refresh(ui);
 }
 
 /// Recompute the Overview health verdict and freshness/coverage tiles from the (cheap, local)
