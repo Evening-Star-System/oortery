@@ -483,6 +483,7 @@ mod tests {
             mode: SyncMode::Copy,
             schedule: Schedule::Manual,
             last_run: None,
+            at: None,
         };
         let group = "esp/test-roundtrip";
         let jobid = rcd.start_job(&job, group).expect("start job");

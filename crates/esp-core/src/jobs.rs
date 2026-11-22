@@ -99,8 +99,8 @@ impl Schedule {
         }
     }
 
-    /// True if a job on this schedule is due to run now, given when it last ran (`None` = never).
-    /// A never-run scheduled job is due immediately; a manual job is never due.
+    /// Interval-only due check: due if never run, or the interval has elapsed since the last run.
+    /// Used for Hourly/6-hourly, and for Daily/Weekly that have no pinned time of day.
     pub fn is_due(self, last_run: Option<i64>, now: i64) -> bool {
         match self.interval_secs() {
             None => false,
@@ -110,6 +110,103 @@ impl Schedule {
             },
         }
     }
+
+    /// Due check that honors a pinned time of day. When `at` is set and this is a Daily or Weekly
+    /// schedule, the job is due once per day (or per week on the chosen weekday) after the chosen
+    /// local time, and only if it has not already run for that occurrence. When `at` is `None`, or
+    /// the schedule is not Daily/Weekly, this falls back to the plain interval check, so existing
+    /// jobs behave exactly as before.
+    pub fn is_due_at(self, at: Option<DayTime>, last_run: Option<i64>, now: i64) -> bool {
+        match (self, at) {
+            (Schedule::Daily, Some(dt)) | (Schedule::Weekly, Some(dt)) => {
+                let occ = last_occurrence(now, dt, matches!(self, Schedule::Weekly));
+                let not_yet_run = match last_run {
+                    Some(lr) => lr < occ,
+                    None => true,
+                };
+                now >= occ && not_yet_run
+            }
+            _ => self.is_due(last_run, now),
+        }
+    }
+}
+
+/// A pinned time of day for a schedule: 24-hour `hour`:`minute`, local time. For a Weekly schedule,
+/// `weekday` (0 = Sunday .. 6 = Saturday) also pins the day; it is ignored for Daily.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DayTime {
+    pub hour: u8,
+    pub minute: u8,
+    #[serde(default)]
+    pub weekday: u8,
+}
+
+impl DayTime {
+    /// A short label like "02:00" or "Mon 02:00" (weekly).
+    pub fn label(self, weekly: bool) -> String {
+        let hm = format!("{:02}:{:02}", self.hour, self.minute);
+        if weekly {
+            const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+            format!("{} {hm}", DAYS[(self.weekday % 7) as usize])
+        } else {
+            hm
+        }
+    }
+}
+
+/// Local broken-down time of a Unix instant (system timezone), via libc. Unix-only; other targets
+/// get a zeroed struct (the time-of-day feature is gated to unix in the UI).
+#[cfg(unix)]
+fn local_tm(unix: i64) -> libc::tm {
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        let t = unix as libc::time_t;
+        libc::localtime_r(&t, &mut tm);
+        tm
+    }
+}
+
+/// Unix seconds of `hour:minute:00` local time on the calendar day containing `day_anchor`.
+/// DST-correct: `mktime` resolves the offset (`tm_isdst = -1`).
+#[cfg(unix)]
+fn hms_on_day(day_anchor: i64, hour: u8, minute: u8) -> i64 {
+    let mut tm = local_tm(day_anchor);
+    tm.tm_hour = hour as libc::c_int;
+    tm.tm_min = minute as libc::c_int;
+    tm.tm_sec = 0;
+    tm.tm_isdst = -1;
+    unsafe { libc::mktime(&mut tm) as i64 }
+}
+
+/// The most recent occurrence of the scheduled time at or before `now`. For `weekly`, steps back to
+/// the chosen weekday. Each candidate day is resolved through `mktime` so DST is handled correctly.
+#[cfg(unix)]
+fn last_occurrence(now: i64, at: DayTime, weekly: bool) -> i64 {
+    let today = hms_on_day(now, at.hour, at.minute);
+    if !weekly {
+        // Daily: today's time if we have reached it, else yesterday's.
+        return if now >= today {
+            today
+        } else {
+            hms_on_day(now - 86_400, at.hour, at.minute)
+        };
+    }
+    // Weekly: find how many days back the target weekday is, then resolve that day's time. If that
+    // occurrence is still ahead of now (today is the target weekday but before the time), go back a week.
+    let cur_wd = local_tm(now).tm_wday as i64;
+    let delta = (cur_wd - (at.weekday % 7) as i64).rem_euclid(7);
+    let occ = hms_on_day(now - delta * 86_400, at.hour, at.minute);
+    if now >= occ {
+        occ
+    } else {
+        hms_on_day(now - (delta + 7) * 86_400, at.hour, at.minute)
+    }
+}
+
+/// Non-unix fallback: no local-time scheduling, treat as "due now" style interval behaviour.
+#[cfg(not(unix))]
+fn last_occurrence(now: i64, _at: DayTime, _weekly: bool) -> i64 {
+    now
 }
 
 /// How a sync reconciles destination against source.
@@ -211,6 +308,9 @@ pub struct Job {
     /// Unix seconds of the last run, for scheduling. `None` until it has run once.
     #[serde(default)]
     pub last_run: Option<i64>,
+    /// A pinned time of day for Daily/Weekly schedules. `None` keeps the plain interval behaviour.
+    #[serde(default)]
+    pub at: Option<DayTime>,
 }
 
 /// The user's home directory, OS-aware: `HOME` on Linux and macOS, `USERPROFILE` on Windows.
@@ -354,6 +454,7 @@ mod tests {
             mode: SyncMode::Copy,
             schedule: Schedule::Manual,
             last_run: None,
+            at: None,
         };
         assert_eq!(slug_id("Home Photos!!", &[]), "home-photos");
         assert_eq!(
@@ -392,6 +493,7 @@ mod tests {
             mode,
             schedule: Schedule::Manual,
             last_run: None,
+            at: None,
         };
         let base = std::env::temp_dir().join(format!("esp-mirror-guard-{}", std::process::id()));
         let empty = base.join("empty");
@@ -415,6 +517,78 @@ mod tests {
         assert!(guard_local_mirror_source(&remote).is_ok());
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn time_of_day_due_logic() {
+        let _env = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Pin the timezone so the assertions are deterministic (localtime_r reads TZ via tzset).
+        extern "C" {
+            fn tzset();
+        }
+        std::env::set_var("TZ", "UTC");
+        unsafe { tzset() };
+
+        let now = 1_700_000_000; // 2023-11-14 22:13:20 UTC, a Tuesday (wday=2)
+        let two_am = DayTime {
+            hour: 2,
+            minute: 0,
+            weekday: 0,
+        };
+        let occ = last_occurrence(now, two_am, false);
+        assert_eq!(occ, 1_699_927_200, "02:00 UTC on 2023-11-14");
+        assert!(occ <= now);
+
+        // Daily: due when never run or when the last run predates this occurrence; not due once it
+        // has run for this occurrence.
+        assert!(Schedule::Daily.is_due_at(Some(two_am), None, now));
+        assert!(!Schedule::Daily.is_due_at(Some(two_am), Some(occ), now));
+        assert!(Schedule::Daily.is_due_at(Some(two_am), Some(occ - 1), now));
+
+        // Before today's time, the most recent occurrence is yesterday's (within ~a day, DST-safe).
+        let early = 1_699_921_000; // 2023-11-14 00:16:40 UTC, before 02:00
+        let occ_y = last_occurrence(early, two_am, false);
+        assert!(occ_y < early && early - occ_y < 25 * 3_600);
+
+        // Weekly on today's weekday resolves to today's time; a different weekday steps back a few
+        // days but stays within the past week.
+        let tue = DayTime {
+            hour: 2,
+            minute: 0,
+            weekday: 2,
+        };
+        assert_eq!(last_occurrence(now, tue, true), 1_699_927_200);
+        let fri = DayTime {
+            hour: 2,
+            minute: 0,
+            weekday: 5,
+        };
+        let occ_f = last_occurrence(now, fri, true);
+        assert!(occ_f < now && now - occ_f < 8 * 86_400);
+
+        // No pinned time is exactly the old interval behaviour; Manual is never due.
+        assert_eq!(
+            Schedule::Daily.is_due_at(None, Some(1_000), now),
+            Schedule::Daily.is_due(Some(1_000), now)
+        );
+        assert!(!Schedule::Manual.is_due_at(Some(two_am), None, now));
+
+        std::env::remove_var("TZ");
+        unsafe { tzset() };
+    }
+
+    #[test]
+    fn daytime_label() {
+        let dt = DayTime {
+            hour: 2,
+            minute: 5,
+            weekday: 1,
+        };
+        assert_eq!(dt.label(false), "02:05");
+        assert_eq!(dt.label(true), "Mon 02:05");
     }
 
     #[test]
@@ -472,6 +646,7 @@ mod tests {
             mode: SyncMode::Copy,
             schedule: Schedule::Manual,
             last_run: None,
+            at: None,
         }])
         .unwrap();
         assert_eq!(load_jobs().unwrap().len(), 1);
@@ -497,6 +672,7 @@ mod tests {
             mode: SyncMode::Mirror,
             schedule: Schedule::Manual,
             last_run: None,
+            at: None,
         }];
         save_jobs(&jobs).unwrap();
         let back = load_jobs().unwrap();

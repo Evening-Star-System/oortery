@@ -33,6 +33,9 @@ pub struct BackupJob {
     /// Unix seconds of the last run, for scheduling.
     #[serde(default)]
     pub last_run: Option<i64>,
+    /// A pinned time of day for Daily/Weekly schedules. `None` keeps the plain interval behaviour.
+    #[serde(default)]
+    pub at: Option<crate::jobs::DayTime>,
 }
 
 /// One restic snapshot.
@@ -344,6 +347,7 @@ mod tests {
             excludes: Vec::new(),
             schedule: Schedule::Manual,
             last_run: None,
+            at: None,
         };
         save_password(&job.id, "esp-test-pw").unwrap();
         init_repo(&job).expect("init");
@@ -379,6 +383,7 @@ mod tests {
             excludes: Vec::new(),
             schedule: Schedule::Manual,
             last_run: None,
+            at: None,
         };
         assert!(restore(&job, "latest", "/").is_err());
         assert!(restore(&job, "latest", "  ").is_err());
@@ -414,6 +419,7 @@ mod tests {
             excludes: Vec::new(),
             schedule: Schedule::Manual,
             last_run: None,
+            at: None,
         };
         save_password(&job.id, "pw").unwrap();
         init_repo(&job).expect("init");
@@ -454,6 +460,7 @@ mod tests {
             excludes: Vec::new(),
             schedule: Schedule::Manual,
             last_run: None,
+            at: None,
         };
         save_password(&job.id, "pw").unwrap();
         init_repo(&job).expect("init");
@@ -503,6 +510,7 @@ mod tests {
             excludes: vec!["node_modules".into()],
             schedule: Schedule::Manual,
             last_run: None,
+            at: None,
         };
         save_password(&job.id, "pw").unwrap();
         init_repo(&job).expect("init");

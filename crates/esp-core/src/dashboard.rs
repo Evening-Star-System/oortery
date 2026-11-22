@@ -179,6 +179,7 @@ mod tests {
             excludes: vec![],
             schedule: Schedule::Manual,
             last_run: None,
+            at: None,
         }])
         .unwrap();
         let s = summary();

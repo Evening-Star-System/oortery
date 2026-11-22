@@ -37,8 +37,8 @@ pub use engine::{
     JobStatus, Mount, Rcd, Transfer,
 };
 pub use jobs::{
-    home_dir, load_jobs, now_unix, save_jobs, slug_id, took_corrupt_recovery, Endpoint, Job,
-    Schedule, SyncMode,
+    home_dir, load_jobs, now_unix, save_jobs, slug_id, took_corrupt_recovery, DayTime, Endpoint,
+    Job, Schedule, SyncMode,
 };
 pub use lock::{clear_lock, lock_enabled, set_lock, verify as verify_lock};
 pub use p2p::{syncthing_path, Syncthingd};
@@ -294,6 +294,32 @@ pub fn update_remote(name: &str, params: &[(String, String)]) -> Result<()> {
             "rclone config update failed: {}",
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+    Ok(())
+}
+
+/// Check that a freshly-created remote actually works, by listing its root once. Returns the
+/// backend's own error if it cannot (bad credentials, an unreachable endpoint, or Internxt without
+/// its mnemonic), so the caller can discard a remote that got written to config but is not usable.
+/// Retries are forced to one so a broken remote fails fast instead of hanging.
+pub fn verify_remote(name: &str) -> Result<()> {
+    let out = Command::new("rclone")
+        .args([
+            "lsd",
+            &format!("{name}:"),
+            "--max-depth",
+            "1",
+            "--retries",
+            "1",
+            "--low-level-retries",
+            "1",
+            "--timeout",
+            "30s",
+        ])
+        .output()
+        .context("failed to run `rclone lsd` to verify the remote")?;
+    if !out.status.success() {
+        anyhow::bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
     }
     Ok(())
 }

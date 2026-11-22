@@ -232,9 +232,12 @@ fn preset_page(
         let (tx, rx) = async_channel::bounded(1);
         let n = name.clone();
         std::thread::spawn(move || {
-            let _ = tx.send_blocking(
-                esp_core::create_remote(&n, &backend, &params).map_err(|e| e.to_string()),
-            );
+            let res = esp_core::create_remote(&n, &backend, &params).and_then(|()| {
+                esp_core::verify_remote(&n).inspect_err(|_| {
+                    let _ = esp_core::delete_remote(&n); // never keep a remote that does not work
+                })
+            });
+            let _ = tx.send_blocking(res.map_err(|e| e.to_string()));
         });
         let (ui_c, dlg_c, name_c, btn_c) = (ui2.clone(), dlg2.clone(), name.clone(), btn.clone());
         glib::spawn_future_local(async move {
@@ -615,8 +618,12 @@ fn config_value_page(
         let (tx, rx) = async_channel::bounded(1);
         let (n, b) = (name.clone(), backend.clone());
         std::thread::spawn(move || {
-            let _ = tx
-                .send_blocking(esp_core::create_remote(&n, &b, &params).map_err(|e| e.to_string()));
+            let res = esp_core::create_remote(&n, &b, &params).and_then(|()| {
+                esp_core::verify_remote(&n).inspect_err(|_| {
+                    let _ = esp_core::delete_remote(&n); // never keep a remote that does not work
+                })
+            });
+            let _ = tx.send_blocking(res.map_err(|e| e.to_string()));
         });
         let (ui_c, dlg_c, btn_c, name_c) = (ui2.clone(), dlg2.clone(), btn.clone(), name.clone());
         glib::spawn_future_local(async move {

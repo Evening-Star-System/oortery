@@ -572,6 +572,7 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<Job>) {
             mode,
             schedule,
             last_run: prev_last_run,
+            at: None,
         };
         match jobs.iter().position(|j| j.id == id) {
             Some(pos) => jobs[pos] = new_job,

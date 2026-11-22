@@ -169,6 +169,7 @@ mod tests {
             mode: SyncMode::Copy,
             schedule: Schedule::Daily,
             last_run: None,
+            at: None,
         }])
         .unwrap();
         let exported = export_bundle().unwrap();
@@ -224,6 +225,7 @@ mod tests {
                 mode: SyncMode::Mirror,
                 schedule: Schedule::Daily,
                 last_run: None,
+                at: None,
             }],
             backups: vec![],
             remotes: vec![],
@@ -267,6 +269,7 @@ mod tests {
                 excludes: vec![],
                 schedule: Schedule::Daily,
                 last_run: None,
+                at: None,
             }],
             remotes: vec![],
         };

@@ -80,6 +80,7 @@ fn s3_sync_and_backup_roundtrip() {
         mode: SyncMode::Copy,
         schedule: esp_core::Schedule::Manual,
         last_run: None,
+        at: None,
     };
     run_sync(&rcd, &up, "it/s3-up");
 
@@ -94,6 +95,7 @@ fn s3_sync_and_backup_roundtrip() {
         mode: SyncMode::Copy,
         schedule: esp_core::Schedule::Manual,
         last_run: None,
+        at: None,
     };
     run_sync(&rcd, &dn, "it/s3-down");
     assert_eq!(
@@ -136,6 +138,7 @@ fn s3_sync_and_backup_roundtrip() {
             excludes: Vec::new(),
             schedule: esp_core::Schedule::Manual,
             last_run: None,
+            at: None,
         };
         esp_core::save_password(&bjob.id, "it-pw").expect("save pw");
         init_repo(&bjob).expect("init restic repo on S3");
