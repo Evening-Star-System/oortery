@@ -254,7 +254,16 @@ fn main() -> glib::ExitCode {
         esp_core::desktop::prune_places();
         load_css();
     });
-    app.connect_activate(build_ui);
+    // Relaunching Oortery while it runs in the background re-shows the existing window instead of
+    // building a second one, so "reopen" works on every desktop (click the app again).
+    app.connect_activate(|app| {
+        if let Some(win) = app.windows().first() {
+            win.set_visible(true);
+            win.present();
+        } else {
+            build_ui(app);
+        }
+    });
     app.run()
 }
 
@@ -528,6 +537,10 @@ fn build_ui(app: &adw::Application) {
     diag_item.add_css_class("flat");
     diag_item.set_halign(gtk::Align::Fill);
     menu_box.append(&diag_item);
+    let quit_item = gtk::Button::with_label("Quit Oortery");
+    quit_item.add_css_class("flat");
+    quit_item.set_halign(gtk::Align::Fill);
+    menu_box.append(&quit_item);
     let menu_pop = gtk::Popover::new();
     menu_pop.set_child(Some(&menu_box));
     menu_btn.set_popover(Some(&menu_pop));
@@ -580,7 +593,13 @@ fn build_ui(app: &adw::Application) {
             height: w.default_height(),
             maximized: w.is_maximized(),
         });
-        // Mounts end with the app, so take their sidebar bookmarks with us on the way out.
+        if esp_core::pref_bool(esp_core::KEEP_BACKGROUND) {
+            // Keep running so mounts stay live; hide instead of quitting. Reopen by launching
+            // Oortery again (re-shows this window) or from the tray; Quit in the menu fully exits.
+            w.set_visible(false);
+            return glib::Propagation::Stop;
+        }
+        // A real quit: mounts end with the app, so take their sidebar bookmarks with us.
         esp_core::desktop::prune_places();
         glib::Propagation::Proceed
     });
@@ -658,6 +677,18 @@ fn build_ui(app: &adw::Application) {
         diag_item.connect_clicked(move |_| {
             pop.popdown();
             diagnostics::present(&ui_d);
+        });
+    }
+    {
+        // A real quit (even in background mode): clear sidebar bookmarks, then exit. The daemon is
+        // killed on exit, which tears down mounts.
+        let (win, pop) = (window.clone(), menu_pop.clone());
+        quit_item.connect_clicked(move |_| {
+            pop.popdown();
+            esp_core::desktop::prune_places();
+            if let Some(app) = win.application() {
+                app.quit();
+            }
         });
     }
 

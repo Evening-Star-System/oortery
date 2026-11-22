@@ -46,7 +46,9 @@ pub use lock::{clear_lock, lock_enabled, set_lock, verify as verify_lock};
 pub use p2p::{syncthing_path, Syncthingd};
 pub use portable::{export_bundle, import_bundle, ImportResult};
 pub use preflight::{scan_dir, Hazard, Issue};
-pub use settings::{load_window_state, save_window_state, WindowState};
+pub use settings::{
+    load_window_state, pref_bool, save_window_state, set_pref_bool, WindowState, KEEP_BACKGROUND,
+};
 pub use stall::{StallTracker, DEFAULT_STALL_SECS};
 pub use tuning::{backend_of, tuning_for, Tuning};
 

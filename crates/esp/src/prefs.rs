@@ -37,6 +37,20 @@ pub fn present(ui: &Rc<Ui>) {
         }
     });
     g_start.add(&autostart);
+
+    // Keep the app (and mounts) alive after the window is closed, so a mounted cloud stays mounted
+    // until you really quit. Reopen by launching Oortery again, or from the tray where available.
+    let background = adw::SwitchRow::builder()
+        .title("Keep running in the background")
+        .subtitle(
+            "Closing the window keeps your mounts live. Reopen Oortery any time; Quit fully exits.",
+        )
+        .build();
+    background.set_active(esp_core::pref_bool(esp_core::KEEP_BACKGROUND));
+    background.connect_active_notify(|sw| {
+        esp_core::set_pref_bool(esp_core::KEEP_BACKGROUND, sw.is_active());
+    });
+    g_start.add(&background);
     page.add(&g_start);
 
     // Settings file: move the setup to another computer.
