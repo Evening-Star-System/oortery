@@ -884,6 +884,38 @@ fn overview_page(node_count: &Rc<Cell<usize>>) -> OverviewWidgets {
         area.queue_draw();
         glib::ControlFlow::Continue
     });
+
+    // Easter egg: press and hold the evening star (the sun, center of the hero) for 3 seconds to
+    // open a place. Deliberately hidden: no cursor change, no hint. A press generation counter
+    // means only an uninterrupted 3-second hold fires; a tap or a release cancels it.
+    // TODO: replace EASTER_EGG_URL with the real destination.
+    const EASTER_EGG_URL: &str = "https://eveningstar.app/"; // placeholder, replace later
+    let egg = gtk::GestureClick::new();
+    let egg_gen = Rc::new(Cell::new(0u64));
+    let (gen_press, gen_release, gen_cancel) =
+        (egg_gen.clone(), egg_gen.clone(), egg_gen.clone());
+    let hero_hit = hero.clone();
+    egg.connect_pressed(move |_g, _n, x, y| {
+        let (w, h) = (hero_hit.width() as f64, hero_hit.height() as f64);
+        let (cx, cy) = (w * 0.5, h * 0.52); // where constellation::draw puts the evening star
+        if (x - cx).hypot(y - cy) <= w.min(h) * 0.16 {
+            let g = gen_press.get().wrapping_add(1);
+            gen_press.set(g);
+            let gen_t = gen_press.clone();
+            glib::timeout_add_seconds_local_once(3, move || {
+                if gen_t.get() == g {
+                    let _ = gtk::gio::AppInfo::launch_default_for_uri(
+                        EASTER_EGG_URL,
+                        None::<&gtk::gio::AppLaunchContext>,
+                    );
+                }
+            });
+        }
+    });
+    egg.connect_released(move |_, _, _, _| gen_release.set(gen_release.get().wrapping_add(1)));
+    egg.connect_cancel(move |_, _| gen_cancel.set(gen_cancel.get().wrapping_add(1)));
+    hero.add_controller(egg);
+
     col.append(&hero);
 
     // First-run: a welcoming two-step launcher instead of empty tiles. Shown only when nothing
