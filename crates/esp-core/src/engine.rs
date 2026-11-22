@@ -287,15 +287,17 @@ fn prepare_mountpoint(mount_point: &str) -> Result<()> {
     if std::fs::create_dir_all(mount_point).is_ok() {
         return Ok(());
     }
-    clear_stale_mount(mount_point);
+    lazy_unmount(mount_point);
     std::fs::create_dir_all(mount_point)
         .with_context(|| format!("preparing mountpoint {mount_point}"))
 }
 
-/// Best-effort detach of a (possibly dead) FUSE mount, without root. `fusermount` ships with FUSE,
-/// which rclone already needs to mount at all; newer systems name it `fusermount3`. Failure is
-/// ignored: if nothing is mounted there, the command simply errors and we fall through to the retry.
-fn clear_stale_mount(mount_point: &str) {
+/// Detach a FUSE mount lazily, without root: it unmounts immediately from the namespace and
+/// finishes cleanup when the last open handle closes (the same thing the desktop's "eject" does for
+/// a busy drive). `fusermount` ships with FUSE, which rclone already needs to mount at all; newer
+/// systems name it `fusermount3`. Returns whether a detach succeeded. Harmless when nothing is
+/// mounted there (both programs just error and we return false).
+fn lazy_unmount(mount_point: &str) -> bool {
     for prog in ["fusermount3", "fusermount"] {
         let ok = Command::new(prog)
             .args(["-u", "-z", mount_point])
@@ -303,19 +305,31 @@ fn clear_stale_mount(mount_point: &str) {
             .map(|o| o.status.success())
             .unwrap_or(false);
         if ok {
-            return;
+            return true;
         }
     }
+    false
 }
 
-/// Unmount whatever is at `mount_point`.
+/// Unmount whatever is at `mount_point`. A clean unmount is tried first (it flushes rclone's VFS),
+/// but it fails with "Device or resource busy" when something holds the mount open (a file manager
+/// viewing it, a terminal cd'd into it). In that case fall back to a lazy detach, which always
+/// succeeds and completes when the last handle closes, so Unmount is never stuck.
 pub fn unmount(port: u16, mount_point: &str) -> Result<()> {
-    rc_at(
+    match rc_at(
         port,
         "mount/unmount",
         serde_json::json!({ "mountPoint": mount_point }),
-    )?;
-    Ok(())
+    ) {
+        Ok(_) => Ok(()),
+        Err(clean_err) => {
+            if lazy_unmount(mount_point) {
+                Ok(())
+            } else {
+                Err(clean_err)
+            }
+        }
+    }
 }
 
 /// The mounts the daemon currently serves.
