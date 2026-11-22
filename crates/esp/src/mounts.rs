@@ -166,6 +166,8 @@ fn mount(ui: &Rc<Ui>, name: &str) {
                 // Let the daemon register the mount before we re-query listmounts, so the row
                 // flips to "Unmount" on the first refresh.
                 glib::timeout_future(std::time::Duration::from_millis(500)).await;
+                // Make it show up in the file manager sidebar, like a plugged-in drive.
+                esp_core::desktop::add_place(&point_c, &name_c);
                 refresh(&ui_c);
                 ui_c.toast(&format!("Mounted {name_c} at {point_c}"));
             }
@@ -235,6 +237,8 @@ fn remove_now(ui: &Rc<Ui>, name: &str) {
 }
 
 fn finish_remove(ui: &Rc<Ui>, name: &str) {
+    // A removed remote's mount is gone, so drop its sidebar bookmark too.
+    esp_core::desktop::remove_place(&point_for(name));
     match esp_core::delete_remote(name) {
         Ok(()) => {
             crate::refresh_all(ui);
@@ -260,6 +264,7 @@ fn unmount(ui: &Rc<Ui>, name: &str) {
     glib::spawn_future_local(async move {
         match rx.recv().await {
             Ok(Ok(())) => {
+                esp_core::desktop::remove_place(&point_for(&name_c));
                 refresh(&ui_c);
                 ui_c.toast(&format!("Unmounted {name_c}"));
             }

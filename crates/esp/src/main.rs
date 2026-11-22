@@ -249,6 +249,9 @@ fn main() -> glib::ExitCode {
         // Use our own icon (the static evening-star glyph) for the window, taskbar, and Activities,
         // so it is not left to app-id/theme matching that can miss on some setups.
         gtk::Window::set_default_icon_name(APP_ID);
+        // No mounts are live at startup (they end with the session), so clear any sidebar
+        // bookmarks a prior crash may have left pointing at now-empty mountpoints.
+        esp_core::desktop::prune_places();
         load_css();
     });
     app.connect_activate(build_ui);
@@ -577,6 +580,8 @@ fn build_ui(app: &adw::Application) {
             height: w.default_height(),
             maximized: w.is_maximized(),
         });
+        // Mounts end with the app, so take their sidebar bookmarks with us on the way out.
+        esp_core::desktop::prune_places();
         glib::Propagation::Proceed
     });
 
