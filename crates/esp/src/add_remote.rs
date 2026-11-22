@@ -615,15 +615,41 @@ fn config_value_page(
         // shows a connecting state and re-enables on failure.
         btn.set_sensitive(false);
         btn.set_label("Connecting...");
+
+        // A few backends (Internxt) only write their encryption material in a later state of
+        // rclone's config flow, so a one-shot `create` leaves a broken, mnemonic-less remote. Those
+        // go through the state machine, which needs the rc daemon running. Everyone else keeps the
+        // simpler one-shot create.
+        let needs_flow = esp_core::connect::needs_login_flow(&backend);
+        let port = if needs_flow {
+            match ui2.ensure_rcd() {
+                Ok(r) => Some(r.port()),
+                Err(e) => {
+                    btn.set_sensitive(true);
+                    btn.set_label("Create");
+                    ui2.error(&format!("Could not start the engine: {e}"));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+
         let (tx, rx) = async_channel::bounded(1);
         let (n, b) = (name.clone(), backend.clone());
         std::thread::spawn(move || {
-            let res = esp_core::create_remote(&n, &b, &params).and_then(|()| {
+            let created = match port {
+                Some(p) => esp_core::connect::credential_connect(p, &n, &b, &params),
+                None => esp_core::create_remote(&n, &b, &params),
+            };
+            let res = created.and_then(|()| {
                 esp_core::verify_remote(&n).inspect_err(|_| {
                     let _ = esp_core::delete_remote(&n); // never keep a remote that does not work
                 })
             });
-            let _ = tx.send_blocking(res.map_err(|e| e.to_string()));
+            // Format the whole error chain ({:#}) so the user sees rclone's real cause (e.g.
+            // "Wrong login credentials"), not just our top-level "starting config/create" context.
+            let _ = tx.send_blocking(res.map_err(|e| format!("{e:#}")));
         });
         let (ui_c, dlg_c, btn_c, name_c) = (ui2.clone(), dlg2.clone(), btn.clone(), name.clone());
         glib::spawn_future_local(async move {
