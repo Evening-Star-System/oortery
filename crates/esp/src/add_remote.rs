@@ -110,11 +110,41 @@ fn picker_page(
     scroll.set_vexpand(true);
     scroll.set_child(Some(&list));
 
+    // Stupid-easy presets for the common object stores, offered first so most people never touch
+    // the raw provider list.
+    let popular = gtk::Label::new(Some("Popular"));
+    popular.set_xalign(0.0);
+    popular.add_css_class("heading");
+    let presets_list = gtk::ListBox::new();
+    presets_list.add_css_class("boxed-list");
+    presets_list.set_selection_mode(gtk::SelectionMode::None);
+    for p in esp_core::presets::PRESETS {
+        let row = adw::ActionRow::builder()
+            .title(p.name)
+            .subtitle(p.blurb)
+            .activatable(true)
+            .build();
+        row.add_prefix(&gtk::Image::from_icon_name("folder-remote-symbolic"));
+        row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+        let (ui2, nav2, dlg2) = (ui.clone(), nav.clone(), dialog.clone());
+        row.connect_activated(move |_| {
+            nav2.push(&preset_page(&ui2, p, &dlg2));
+        });
+        presets_list.append(&row);
+    }
+    let all_label = gtk::Label::new(Some("Or pick any provider"));
+    all_label.set_xalign(0.0);
+    all_label.add_css_class("heading");
+    all_label.set_margin_top(6);
+
     let body = gtk::Box::new(gtk::Orientation::Vertical, 10);
     body.set_margin_top(12);
     body.set_margin_bottom(12);
     body.set_margin_start(12);
     body.set_margin_end(12);
+    body.append(&popular);
+    body.append(&presets_list);
+    body.append(&all_label);
     body.append(&search);
     body.append(&scroll);
 
@@ -125,6 +155,116 @@ fn picker_page(
     adw::NavigationPage::builder()
         .title("Add a remote")
         .tag("picker")
+        .child(&tv)
+        .build()
+}
+
+/// A stupid-easy preset (Cloudflare R2, Amazon S3, any S3-compatible, Backblaze B2): a short form of
+/// only the essentials, which assembles the full rclone config. These backends do not log in at
+/// create time, so a correct preset connects first try.
+fn preset_page(
+    ui: &Rc<Ui>,
+    preset: &'static esp_core::presets::Preset,
+    dialog: &adw::Dialog,
+) -> adw::NavigationPage {
+    let prefs = adw::PreferencesPage::new();
+    let header = adw::HeaderBar::new();
+
+    let gname = adw::PreferencesGroup::builder().title("New remote").build();
+    let name_row = adw::EntryRow::builder().title("Name").build();
+    gname.add(&name_row);
+    prefs.add(&gname);
+
+    let gopts = adw::PreferencesGroup::builder()
+        .title(preset.name)
+        .description(preset.blurb)
+        .build();
+    // (key, label, required, entry)
+    let mut fields: Vec<(String, String, bool, gtk::Editable)> = Vec::new();
+    for f in preset.fields {
+        let title = if f.required {
+            format!("{} (required)", f.label)
+        } else {
+            f.label.to_string()
+        };
+        let editable: gtk::Editable = if f.secret {
+            let row = adw::PasswordEntryRow::builder().title(&title).build();
+            gopts.add(&row);
+            row.upcast()
+        } else {
+            let row = adw::EntryRow::builder().title(&title).build();
+            gopts.add(&row);
+            row.upcast()
+        };
+        fields.push((f.key.to_string(), f.label.to_string(), f.required, editable));
+    }
+    prefs.add(&gopts);
+
+    let create = gtk::Button::with_label("Create");
+    create.add_css_class("suggested-action");
+    header.pack_end(&create);
+
+    let (ui2, dlg2, preset_id, name_row2) =
+        (ui.clone(), dialog.clone(), preset.id, name_row.clone());
+    create.connect_clicked(move |btn| {
+        let name = name_row2.text().trim().to_string();
+        if name.is_empty() {
+            ui2.error("Give the remote a name.");
+            return;
+        }
+        if let Some((_, label, _, _)) = fields
+            .iter()
+            .find(|(_, _, required, e)| *required && e.text().trim().is_empty())
+        {
+            ui2.error(&format!("\u{201c}{label}\u{201d} is required."));
+            return;
+        }
+        let mut values = std::collections::BTreeMap::new();
+        for (k, _, _, e) in &fields {
+            values.insert(k.clone(), e.text().to_string());
+        }
+        let Some((backend, params)) = esp_core::presets::build(preset_id, &values) else {
+            return;
+        };
+
+        btn.set_sensitive(false);
+        btn.set_label("Connecting...");
+        let (tx, rx) = async_channel::bounded(1);
+        let n = name.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send_blocking(
+                esp_core::create_remote(&n, &backend, &params).map_err(|e| e.to_string()),
+            );
+        });
+        let (ui_c, dlg_c, name_c, btn_c) = (ui2.clone(), dlg2.clone(), name.clone(), btn.clone());
+        glib::spawn_future_local(async move {
+            match rx.recv().await {
+                Ok(Ok(())) => {
+                    dlg_c.close();
+                    crate::refresh_all(&ui_c);
+                    ui_c.toast(&format!("Added {name_c}"));
+                }
+                Ok(Err(e)) => {
+                    btn_c.set_sensitive(true);
+                    btn_c.set_label("Create");
+                    ui_c.error(&format!("Could not add: {e}"));
+                }
+                Err(_) => {
+                    btn_c.set_sensitive(true);
+                    btn_c.set_label("Create");
+                }
+            }
+        });
+    });
+
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_vexpand(true);
+    scroll.set_child(Some(&prefs));
+    let tv = adw::ToolbarView::new();
+    tv.add_top_bar(&header);
+    tv.set_content(Some(&scroll));
+    adw::NavigationPage::builder()
+        .title(preset.name)
         .child(&tv)
         .build()
 }

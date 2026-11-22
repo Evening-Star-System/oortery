@@ -20,6 +20,7 @@ pub mod lock;
 pub mod p2p;
 pub mod portable;
 pub mod preflight;
+pub mod presets;
 pub mod runlog;
 pub mod settings;
 pub mod stall;
