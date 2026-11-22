@@ -55,16 +55,9 @@ pub fn backups_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("backups.json"))
 }
 
-/// Load saved backup jobs. An absent store is an empty list.
+/// Load saved backup jobs. An absent store is an empty list; a corrupt one is set aside, not lost.
 pub fn load_backups() -> Result<Vec<BackupJob>> {
-    let path = backups_path()?;
-    match std::fs::read(&path) {
-        Ok(bytes) => {
-            serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-    }
+    crate::jobs::load_store(&backups_path()?)
 }
 
 /// Save the whole set of backup jobs atomically.

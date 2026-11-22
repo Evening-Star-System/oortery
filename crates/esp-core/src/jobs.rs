@@ -6,7 +6,44 @@
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set true when a corrupt store was moved aside this session, so the UI can tell the user once.
+static RECOVERED_CORRUPT: AtomicBool = AtomicBool::new(false);
+
+/// Whether a corrupt settings file was set aside since this was last checked. Reading it clears
+/// the flag, so the UI toasts about the recovery exactly once.
+pub fn took_corrupt_recovery() -> bool {
+    RECOVERED_CORRUPT.swap(false, Ordering::Relaxed)
+}
+
+/// Read a JSON-array store. A missing file is an empty list. A CORRUPT file is never silently
+/// dropped or later clobbered: it is renamed aside to `<name>.corrupt-<unixtime>` (so the user can
+/// recover it) and an empty list is returned, so the app keeps working and the next save writes a
+/// fresh file rather than overwriting the damaged one. Returns Err only on a real IO failure.
+pub(crate) fn load_store<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    match serde_json::from_slice(&bytes) {
+        Ok(v) => Ok(v),
+        Err(_) => {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "store".to_string());
+            let aside = path.with_file_name(format!("{name}.corrupt-{}", now_unix()));
+            // Best effort: if the rename fails we still degrade to empty, but we never clobber.
+            if std::fs::rename(path, &aside).is_ok() {
+                RECOVERED_CORRUPT.store(true, Ordering::Relaxed);
+            }
+            Ok(Vec::new())
+        }
+    }
+}
 
 /// Unix time now, in whole seconds. Used for scheduling (`Schedule::is_due`).
 pub fn now_unix() -> i64 {
@@ -191,16 +228,9 @@ pub fn jobs_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("jobs.json"))
 }
 
-/// Load saved jobs. An absent store is an empty list, not an error.
+/// Load saved jobs. An absent store is an empty list; a corrupt one is set aside, not lost.
 pub fn load_jobs() -> Result<Vec<Job>> {
-    let path = jobs_path()?;
-    match std::fs::read(&path) {
-        Ok(bytes) => {
-            serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-    }
+    load_store(&jobs_path()?)
 }
 
 /// Save the whole set of jobs atomically (temp file + rename).
@@ -390,6 +420,55 @@ mod tests {
         assert!(Schedule::Daily.is_due(Some(1_000), 1_000 + day));
         assert!(Schedule::Hourly.is_due(Some(1_000), 1_000 + 3_600));
         assert_eq!(Schedule::Weekly.interval_secs(), Some(7 * 24 * 3_600));
+    }
+
+    #[test]
+    fn corrupt_store_is_set_aside_not_lost_or_clobbered() {
+        let _env = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("esp-corrupt-{}", std::process::id()));
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = took_corrupt_recovery(); // clear any prior flag
+
+        // Write a deliberately corrupt jobs.json.
+        let path = jobs_path().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"{ this is not valid json").unwrap();
+
+        // Loading degrades to empty (does not error/crash) and flags the recovery.
+        let loaded = load_jobs().unwrap();
+        assert!(loaded.is_empty());
+        assert!(took_corrupt_recovery(), "recovery flag should be set");
+
+        // The damaged file is preserved aside, and the original path no longer holds the bad bytes.
+        assert!(!path.exists(), "corrupt file should have been moved aside");
+        let aside: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".corrupt-"))
+            .collect();
+        assert_eq!(aside.len(), 1, "exactly one .corrupt- backup expected");
+        let preserved = std::fs::read(aside[0].path()).unwrap();
+        assert_eq!(preserved, b"{ this is not valid json");
+
+        // A following save writes a valid file and leaves the backup intact (no clobber).
+        save_jobs(&[Job {
+            id: "new".into(),
+            name: "New".into(),
+            src: Endpoint::local("/a"),
+            dst: Endpoint::remote("gdrive", "x"),
+            mode: SyncMode::Copy,
+            schedule: Schedule::Manual,
+            last_run: None,
+        }])
+        .unwrap();
+        assert_eq!(load_jobs().unwrap().len(), 1);
+        assert!(aside[0].path().exists(), "backup must survive the save");
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

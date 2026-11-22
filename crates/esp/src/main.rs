@@ -560,6 +560,13 @@ fn build_ui(app: &adw::Application) {
             backups::refresh(&ui_r);
             activity::start_polling(&ui_r);
             start_scheduler(&ui_r);
+            // If the loads above set a damaged settings file aside, tell the user once rather than
+            // letting their syncs/backups vanish silently.
+            if esp_core::took_corrupt_recovery() {
+                ui_r.toast(
+                    "A settings file was unreadable and was set aside; some syncs or backups may need to be re-added.",
+                );
+            }
         })
     };
     if esp_core::lock_enabled() && aid("ESP_NO_LOCK").is_none() {
