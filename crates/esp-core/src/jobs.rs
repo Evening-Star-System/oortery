@@ -213,12 +213,22 @@ pub struct Job {
     pub last_run: Option<i64>,
 }
 
+/// The user's home directory, OS-aware: `HOME` on Linux and macOS, `USERPROFILE` on Windows.
+/// `None` if neither is set. Use this instead of reading `HOME` directly so path defaults (the
+/// folder picker, restore target, exports, the mountpoint) work across platforms.
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+}
+
 /// Oortery's config directory: `$XDG_CONFIG_HOME/oortery` (or `~/.config/oortery`).
 pub fn config_dir() -> Result<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .or_else(|| home_dir().map(|h| h.join(".config")))
         .context("no XDG_CONFIG_HOME or HOME to locate the config dir")?;
     Ok(base.join("oortery"))
 }

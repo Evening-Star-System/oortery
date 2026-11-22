@@ -627,9 +627,15 @@ pub(crate) fn wire_browse(
             None => "/".to_string(),
         };
         // Start where the entry already points (local paths are absolute; the fs root is "/").
+        // For a fresh local pick, open at the user's home (OS-aware) since that is what most
+        // people back up; the browser can still navigate up to the root.
         let cur = path.text().to_string();
         let start = if is_local {
-            cur.trim_start_matches('/').to_string()
+            if cur.is_empty() {
+                crate::folder_browser::local_default_start()
+            } else {
+                cur.trim_start_matches('/').to_string()
+            }
         } else {
             cur
         };

@@ -376,7 +376,9 @@ fn present_snapshots(ui: &Rc<Ui>, job: &BackupJob) {
 /// thread. Restoring into a dedicated new folder (never the filesystem root, never in place) means
 /// a restore can only ADD files; it cannot overwrite the user's live data by a mis-click.
 fn restore_snapshot(ui: &Rc<Ui>, job: &BackupJob, snapshot_id: &str) {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let home = esp_core::home_dir()
+        .map(|h| h.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/tmp".to_string());
     let short = snapshot_id.get(..8).unwrap_or(snapshot_id);
     let target = format!("{home}/Oortery/Restore-{short}");
 
@@ -469,7 +471,11 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
     let (ui_sb, src_path_b) = (ui.clone(), src_path.clone());
     src_browse.connect_clicked(move |_| {
         let cur = src_path_b.text().to_string();
-        let start = cur.trim_start_matches('/').to_string();
+        let start = if cur.is_empty() {
+            folder_browser::local_default_start()
+        } else {
+            cur.trim_start_matches('/').to_string()
+        };
         let p = src_path_b.clone();
         let on_pick: Rc<dyn Fn(String)> = Rc::new(move |sub| p.set_text(&format!("/{sub}")));
         folder_browser::present(&ui_sb, "/".to_string(), start, on_pick);

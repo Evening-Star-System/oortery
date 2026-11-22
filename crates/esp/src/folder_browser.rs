@@ -11,6 +11,16 @@ use std::rc::Rc;
 /// A navigation callback: given a subpath, list and show it.
 type Loader = Rc<dyn Fn(String)>;
 
+/// The subpath to open a LOCAL pick at when the user has not typed a path yet: their home folder,
+/// since that is where Documents and Downloads live and what most people want to back up. The
+/// browser can still navigate up to the filesystem root from there. OS-aware (Linux/macOS/Windows);
+/// empty if the home dir is unknown, which opens at the root.
+pub fn local_default_start() -> String {
+    esp_core::home_dir()
+        .map(|h| h.to_string_lossy().trim_start_matches('/').to_string())
+        .unwrap_or_default()
+}
+
 /// Present the browser over the window. `start` is the subpath to open at (empty = root).
 /// `on_pick` receives the chosen subpath when the user confirms.
 pub fn present(ui: &Rc<Ui>, fs: String, start: String, on_pick: Loader) {

@@ -35,8 +35,8 @@ pub use engine::{
     JobStatus, Mount, Rcd, Transfer,
 };
 pub use jobs::{
-    load_jobs, now_unix, save_jobs, slug_id, took_corrupt_recovery, Endpoint, Job, Schedule,
-    SyncMode,
+    home_dir, load_jobs, now_unix, save_jobs, slug_id, took_corrupt_recovery, Endpoint, Job,
+    Schedule, SyncMode,
 };
 pub use lock::{clear_lock, lock_enabled, set_lock, verify as verify_lock};
 pub use p2p::{syncthing_path, Syncthingd};
