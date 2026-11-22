@@ -31,6 +31,29 @@ fn first_line(s: &str) -> &str {
     s.lines().next().unwrap_or(s)
 }
 
+/// A plain-language note for backends with a known gotcha, shown above the form so a new user is
+/// not left guessing (and, for Internxt, so a 2FA account does not just fail with a 401).
+fn backend_hint(backend: &str) -> Option<&'static str> {
+    match backend {
+        "internxt" => Some(
+            "Use the exact email and password from your Internxt account (the same as internxt.com). \
+             A 'wrong credentials' error usually means a typo or an unusual character in the password; \
+             accounts with two-factor are not supported by the engine yet.",
+        ),
+        "protondrive" => Some(
+            "If you use two-factor authentication, put your current 6-digit code in the 2fa field. \
+             A separate mailbox password (two-password accounts) goes under Advanced settings.",
+        ),
+        "b2" => Some("Account is your Backblaze keyID, and Key is the applicationKey."),
+        "webdav" => Some(
+            "For Nextcloud or ownCloud, set vendor accordingly and use the WebDAV URL that ends in \
+             /remote.php/dav/files/USERNAME/.",
+        ),
+        "sftp" => Some("Leave the password blank to sign in with an SSH key file instead."),
+        _ => None,
+    }
+}
+
 fn picker_page(
     ui: &Rc<Ui>,
     nav: &adw::NavigationView,
@@ -232,6 +255,10 @@ fn config_value_page(
     name_row: &adw::EntryRow,
 ) {
     let gopts = adw::PreferencesGroup::builder().title("Settings").build();
+    // A plain-language note for backends with a known gotcha, so a new user is not left guessing.
+    if let Some(hint) = backend_hint(&provider.name) {
+        gopts.set_description(Some(hint));
+    }
     // (field name, required, the entry) so Create can refuse before making a broken empty remote.
     let mut fields: Vec<(String, bool, gtk::Editable)> = Vec::new();
     for o in provider.basic_options() {
@@ -254,6 +281,35 @@ fn config_value_page(
         }
     }
     prefs.add(&gopts);
+
+    // Advanced settings: options some accounts need (e.g. Proton app_version / mailbox_password)
+    // that the common case does not, tucked into an expander so they do not clutter the form.
+    let advanced: Vec<_> = provider
+        .options
+        .iter()
+        .filter(|o| o.advanced && o.hide == 0 && o.name != "token")
+        .collect();
+    if !advanced.is_empty() {
+        let exp = adw::ExpanderRow::builder()
+            .title("Advanced settings")
+            .subtitle("Only needed for some accounts")
+            .build();
+        for o in advanced {
+            let editable: gtk::Editable = if o.is_password || o.sensitive {
+                let row = adw::PasswordEntryRow::builder().title(&o.name).build();
+                exp.add_row(&row);
+                row.upcast()
+            } else {
+                let row = adw::EntryRow::builder().title(&o.name).build();
+                exp.add_row(&row);
+                row.upcast()
+            };
+            fields.push((o.name.clone(), false, editable));
+        }
+        let agroup = adw::PreferencesGroup::new();
+        agroup.add(&exp);
+        prefs.add(&agroup);
+    }
 
     let create = gtk::Button::with_label("Create");
     create.add_css_class("suggested-action");

@@ -112,6 +112,27 @@ pub fn refresh(ui: &Rc<Ui>) {
             tag.add_css_class("dim");
             tag.add_css_class("caption");
             row.add_suffix(&tag);
+            // Remove this remote (its connection config only; never the files in the cloud).
+            let remove = gtk::Button::from_icon_name("user-trash-symbolic");
+            remove.set_tooltip_text(Some("Remove this remote"));
+            remove.set_valign(gtk::Align::Center);
+            remove.add_css_class("flat");
+            let (ui_r, name_r) = (ui.clone(), r.name.clone());
+            remove.connect_clicked(move |_| {
+                let ui_c = ui_r.clone();
+                let name = name_r.clone();
+                let (ui_done, name_done) = (ui_c.clone(), name.clone());
+                syncs::confirm_delete(
+                    &ui_c,
+                    &name,
+                    "remote",
+                    move || match esp_core::delete_remote(&name_done) {
+                        Ok(()) => refresh(&ui_done),
+                        Err(e) => ui_done.error(&format!("Could not remove: {e}")),
+                    },
+                );
+            });
+            row.add_suffix(&remove);
             ui.remotes_list.append(&row);
         }
     }
