@@ -116,9 +116,14 @@ fn job_row(ui: &Rc<Ui>, job: BackupJob) -> adw::ActionRow {
         .build();
     row.add_prefix(&gtk::Image::from_icon_name("drive-harddisk-symbolic"));
 
-    // A small badge when the backup runs on a schedule.
+    // A small badge when the backup runs on a schedule (with the pinned time, if any).
     if job.schedule != esp_core::Schedule::Manual {
-        let sb = gtk::Label::new(Some(job.schedule.label()));
+        let sched_text = match (job.schedule, job.at) {
+            (esp_core::Schedule::Daily, Some(dt)) => format!("Daily {}", dt.label(false)),
+            (esp_core::Schedule::Weekly, Some(dt)) => format!("Weekly {}", dt.label(true)),
+            (s, _) => s.label().to_string(),
+        };
+        let sb = gtk::Label::new(Some(&sched_text));
         sb.add_css_class("badge");
         sb.set_valign(gtk::Align::Center);
         sb.set_tooltip_text(Some("Runs automatically while Oortery is open."));
@@ -511,15 +516,12 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
     gpw.add(&pw_row);
     prefs.add(&gpw);
 
-    // When: back up on its own, on a schedule (while Oortery is open).
-    let gwhen = adw::PreferencesGroup::builder().title("Schedule").build();
-    let sched_labels: Vec<&str> = esp_core::Schedule::ALL.iter().map(|s| s.label()).collect();
-    let sched_combo = adw::ComboRow::builder()
-        .title("Back up automatically")
-        .subtitle("Runs on this cadence while Oortery is open.")
-        .model(&gtk::StringList::new(&sched_labels))
-        .build();
-    gwhen.add(&sched_combo);
+    // When: back up on its own, on a schedule (while Oortery is open), optionally at a chosen time.
+    let (init_sched, init_at) = edit
+        .as_ref()
+        .map(|j| (j.schedule, j.at))
+        .unwrap_or((esp_core::Schedule::Manual, None));
+    let (gwhen, sched_read) = syncs::schedule_picker(init_sched, init_at);
     prefs.add(&gwhen);
 
     // Prefill when editing an existing backup (the password stays in its file, not shown).
@@ -529,7 +531,6 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
         repo_combo.set_selected(syncs::combo_index_for(&options, &j.repo));
         repo_path.set_text(&j.repo.path);
         excl_row.set_text(&j.excludes.join(", "));
-        sched_combo.set_selected(syncs::sched_index(j.schedule));
         pw_row.set_title("Password (leave blank to keep the current one)");
     }
 
@@ -598,9 +599,7 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        let schedule = *esp_core::Schedule::ALL
-            .get(sched_combo.selected() as usize)
-            .unwrap_or(&esp_core::Schedule::Manual);
+        let (schedule, at) = sched_read();
         let new_job = BackupJob {
             id: id.clone(),
             name: name.clone(),
@@ -609,7 +608,7 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
             excludes,
             schedule,
             last_run: prev_last_run,
-            at: None,
+            at,
         };
         match jobs.iter().position(|j| j.id == id) {
             Some(pos) => jobs[pos] = new_job,

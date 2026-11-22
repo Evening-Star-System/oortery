@@ -137,9 +137,14 @@ fn job_row(ui: &Rc<Ui>, job: Job) -> adw::ActionRow {
     }
     row.add_suffix(&badge);
 
-    // A small badge when the sync runs on a schedule.
+    // A small badge when the sync runs on a schedule (with the pinned time, if any).
     if job.schedule != esp_core::Schedule::Manual {
-        let sb = gtk::Label::new(Some(job.schedule.label()));
+        let sched_text = match (job.schedule, job.at) {
+            (esp_core::Schedule::Daily, Some(dt)) => format!("Daily {}", dt.label(false)),
+            (esp_core::Schedule::Weekly, Some(dt)) => format!("Weekly {}", dt.label(true)),
+            (s, _) => s.label().to_string(),
+        };
+        let sb = gtk::Label::new(Some(&sched_text));
         sb.add_css_class("badge");
         sb.set_valign(gtk::Align::Center);
         sb.set_tooltip_text(Some("Runs automatically while Oortery is open."));
@@ -499,15 +504,12 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<Job>) {
     });
     prefs.add(&gmode);
 
-    // When: run on its own, on a schedule (while Oortery is open).
-    let gwhen = adw::PreferencesGroup::builder().title("Schedule").build();
-    let sched_labels: Vec<&str> = esp_core::Schedule::ALL.iter().map(|s| s.label()).collect();
-    let sched_combo = adw::ComboRow::builder()
-        .title("Run automatically")
-        .subtitle("Runs on this cadence while Oortery is open.")
-        .model(&gtk::StringList::new(&sched_labels))
-        .build();
-    gwhen.add(&sched_combo);
+    // When: run on its own, on a schedule (while Oortery is open), optionally at a chosen time.
+    let (init_sched, init_at) = edit
+        .as_ref()
+        .map(|j| (j.schedule, j.at))
+        .unwrap_or((esp_core::Schedule::Manual, None));
+    let (gwhen, sched_read) = schedule_picker(init_sched, init_at);
     prefs.add(&gwhen);
 
     // Prefill when editing an existing job.
@@ -518,7 +520,6 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<Job>) {
         dst_combo.set_selected(combo_index_for(&options, &j.dst));
         dst_path.set_text(&j.dst.path);
         mode_combo.set_selected(u32::from(j.mode == SyncMode::Mirror));
-        sched_combo.set_selected(sched_index(j.schedule));
     }
 
     let scroll = gtk::ScrolledWindow::new();
@@ -556,9 +557,7 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<Job>) {
         } else {
             SyncMode::Copy
         };
-        let schedule = *esp_core::Schedule::ALL
-            .get(sched_combo.selected() as usize)
-            .unwrap_or(&esp_core::Schedule::Manual);
+        let (schedule, at) = sched_read();
         let mut jobs = esp_core::load_jobs().unwrap_or_default();
         let id = match &edit_id {
             Some(id) => id.clone(),
@@ -572,7 +571,7 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<Job>) {
             mode,
             schedule,
             last_run: prev_last_run,
-            at: None,
+            at,
         };
         match jobs.iter().position(|j| j.id == id) {
             Some(pos) => jobs[pos] = new_job,
@@ -654,6 +653,102 @@ pub(crate) fn sched_index(s: esp_core::Schedule) -> u32 {
         .iter()
         .position(|&x| x == s)
         .unwrap_or(0) as u32
+}
+
+/// Reads the current schedule choice (cadence and optional pinned time) from a schedule picker.
+pub(crate) type ScheduleRead = Rc<dyn Fn() -> (esp_core::Schedule, Option<esp_core::DayTime>)>;
+
+/// A schedule picker for the New-sync / New-backup dialogs: the cadence chooser, plus a time of day
+/// (and a weekday for Weekly) that appear only when Daily or Weekly is chosen. Returns the group to
+/// drop into a dialog and a reader for the current choice. Shared by both dialogs.
+pub(crate) fn schedule_picker(
+    initial: esp_core::Schedule,
+    at: Option<esp_core::DayTime>,
+) -> (adw::PreferencesGroup, ScheduleRead) {
+    use esp_core::{DayTime, Schedule};
+    let group = adw::PreferencesGroup::builder().title("Schedule").build();
+    let labels: Vec<&str> = Schedule::ALL.iter().map(|s| s.label()).collect();
+    let combo = adw::ComboRow::builder()
+        .title("Run automatically")
+        .subtitle("Runs while Oortery is open.")
+        .model(&gtk::StringList::new(&labels))
+        .build();
+    combo.set_selected(sched_index(initial));
+    group.add(&combo);
+
+    const DAYS: [&str; 7] = [
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+    ];
+    let weekday = adw::ComboRow::builder()
+        .title("Day of week")
+        .model(&gtk::StringList::new(&DAYS))
+        .build();
+    group.add(&weekday);
+
+    let hour = adw::SpinRow::builder()
+        .title("Hour")
+        .adjustment(&gtk::Adjustment::new(2.0, 0.0, 23.0, 1.0, 5.0, 0.0))
+        .build();
+    let minute = adw::SpinRow::builder()
+        .title("Minute")
+        .adjustment(&gtk::Adjustment::new(0.0, 0.0, 59.0, 1.0, 10.0, 0.0))
+        .build();
+    group.add(&hour);
+    group.add(&minute);
+
+    if let Some(dt) = at {
+        hour.set_value(dt.hour as f64);
+        minute.set_value(dt.minute as f64);
+        weekday.set_selected(dt.weekday as u32);
+    }
+
+    let vis = {
+        let (w, h, m) = (weekday.clone(), hour.clone(), minute.clone());
+        move |s: Schedule| {
+            let timed = matches!(s, Schedule::Daily | Schedule::Weekly);
+            h.set_visible(timed);
+            m.set_visible(timed);
+            w.set_visible(matches!(s, Schedule::Weekly));
+        }
+    };
+    vis(initial);
+    combo.connect_selected_notify(move |c| {
+        let s = *Schedule::ALL
+            .get(c.selected() as usize)
+            .unwrap_or(&Schedule::Manual);
+        vis(s);
+    });
+
+    let read: ScheduleRead = {
+        let (combo, weekday, hour, minute) =
+            (combo.clone(), weekday.clone(), hour.clone(), minute.clone());
+        Rc::new(move || {
+            let s = *Schedule::ALL
+                .get(combo.selected() as usize)
+                .unwrap_or(&Schedule::Manual);
+            let at = match s {
+                Schedule::Daily => Some(DayTime {
+                    hour: hour.value() as u8,
+                    minute: minute.value() as u8,
+                    weekday: 0,
+                }),
+                Schedule::Weekly => Some(DayTime {
+                    hour: hour.value() as u8,
+                    minute: minute.value() as u8,
+                    weekday: weekday.selected() as u8,
+                }),
+                _ => None,
+            };
+            (s, at)
+        })
+    };
+    (group, read)
 }
 
 /// Build an endpoint from the selected combo option and a path string.

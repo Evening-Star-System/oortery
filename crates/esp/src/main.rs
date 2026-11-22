@@ -340,7 +340,7 @@ fn start_scheduler(ui: &Rc<Ui>) {
         let jobs = esp_core::load_jobs().unwrap_or_default();
         let due: Vec<_> = jobs
             .iter()
-            .filter(|j| j.schedule.is_due(j.last_run, now))
+            .filter(|j| j.schedule.is_due_at(j.at, j.last_run, now))
             .cloned()
             .collect();
         if !due.is_empty() {
@@ -361,7 +361,7 @@ fn start_scheduler(ui: &Rc<Ui>) {
         let backups = esp_core::load_backups().unwrap_or_default();
         let bdue: Vec<_> = backups
             .iter()
-            .filter(|b| b.schedule.is_due(b.last_run, now))
+            .filter(|b| b.schedule.is_due_at(b.at, b.last_run, now))
             .cloned()
             .collect();
         if !bdue.is_empty() {
