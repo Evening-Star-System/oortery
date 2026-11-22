@@ -255,9 +255,18 @@ mod tests {
         // Format with the alternate `{:#}` so the rclone cause (not just the top context) is seen.
         let msg = format!("{:#}", res.unwrap_err()).to_lowercase();
         assert!(
-            ["login", "credential", "access", "connect", "network", "dial", "lookup", "timeout"]
-                .iter()
-                .any(|needle| msg.contains(needle)),
+            [
+                "login",
+                "credential",
+                "access",
+                "connect",
+                "network",
+                "dial",
+                "lookup",
+                "timeout"
+            ]
+            .iter()
+            .any(|needle| msg.contains(needle)),
             "error should reflect a login attempt, got: {msg}"
         );
         // No usable remote should linger from a failed login.
