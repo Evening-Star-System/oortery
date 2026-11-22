@@ -232,7 +232,8 @@ fn config_value_page(
     name_row: &adw::EntryRow,
 ) {
     let gopts = adw::PreferencesGroup::builder().title("Settings").build();
-    let mut fields: Vec<(String, gtk::Editable)> = Vec::new();
+    // (field name, required, the entry) so Create can refuse before making a broken empty remote.
+    let mut fields: Vec<(String, bool, gtk::Editable)> = Vec::new();
     for o in provider.basic_options() {
         if o.name == "token" {
             continue; // OAuth internals, not a manual field
@@ -245,11 +246,11 @@ fn config_value_page(
         if o.is_password || o.sensitive {
             let row = adw::PasswordEntryRow::builder().title(&title).build();
             gopts.add(&row);
-            fields.push((o.name.clone(), row.upcast::<gtk::Editable>()));
+            fields.push((o.name.clone(), o.required, row.upcast::<gtk::Editable>()));
         } else {
             let row = adw::EntryRow::builder().title(&title).build();
             gopts.add(&row);
-            fields.push((o.name.clone(), row.upcast::<gtk::Editable>()));
+            fields.push((o.name.clone(), o.required, row.upcast::<gtk::Editable>()));
         }
     }
     prefs.add(&gopts);
@@ -265,12 +266,21 @@ fn config_value_page(
     create.connect_clicked(move |_| {
         let name = name_row2.text().trim().to_string();
         if name.is_empty() {
-            ui2.toast("Give the remote a name.");
+            ui2.error("Give the remote a name.");
+            return;
+        }
+        // Refuse before creating a broken, empty remote: rclone does not validate required fields,
+        // so a blank one would otherwise be saved and reported as a success.
+        if let Some((field, _, _)) = fields
+            .iter()
+            .find(|(_, required, e)| *required && e.text().trim().is_empty())
+        {
+            ui2.error(&format!("\u{201c}{field}\u{201d} is required."));
             return;
         }
         let params: Vec<(String, String)> = fields
             .iter()
-            .map(|(k, e)| (k.clone(), e.text().to_string()))
+            .map(|(k, _, e)| (k.clone(), e.text().to_string()))
             .collect();
         match esp_core::create_remote(&name, &backend, &params) {
             Ok(()) => {

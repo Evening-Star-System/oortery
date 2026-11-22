@@ -98,12 +98,33 @@ impl Provider {
         self.options.iter().filter(|o| !o.advanced && o.hide == 0)
     }
 
-    /// True if this backend signs in via OAuth (it has a `token` option), meaning it needs
-    /// an interactive browser flow rather than plain config values.
+    /// True if this backend signs in via a browser OAuth flow, rather than by collecting config
+    /// values in a form. Checked against an allowlist of backends verified to actually reach
+    /// rclone's interactive browser step, NOT just "has a `token` option": several token-bearing
+    /// backends (linkbox, mailru, shade, filefabric, jottacloud, zoho) are NOT clean browser-OAuth,
+    /// and routing them to the browser flow created an empty remote while claiming success. They go
+    /// to the field form instead, where their real credentials are collected.
     pub fn needs_oauth(&self) -> bool {
-        self.options.iter().any(|o| o.name == "token")
+        OAUTH_BACKENDS.contains(&self.name.as_str())
     }
 }
+
+/// Backends whose sign-in is a real browser OAuth flow (verified to reach `config_is_local`).
+const OAUTH_BACKENDS: &[&str] = &[
+    "box",
+    "drive",
+    "dropbox",
+    "google cloud storage",
+    "google photos",
+    "hidrive",
+    "huaweidrive",
+    "onedrive",
+    "pcloud",
+    "premiumizeme",
+    "putio",
+    "sharefile",
+    "yandex",
+];
 
 /// Locate the rclone binary. Returns None if it is not installed.
 pub fn rclone_path() -> Option<String> {
