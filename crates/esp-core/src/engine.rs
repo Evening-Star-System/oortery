@@ -225,19 +225,20 @@ pub struct DirEntry {
 /// List the subdirectories of `path` under `fs` (fs is a root: `"remote:"` or `"/"`),
 /// via a daemon on `port`. Free-standing so a worker thread can browse without the handle.
 /// Sorted by name; files are excluded.
+/// The `operations/list` request for a folder pick. A folder picker only needs directory names, so
+/// rclone is told to skip modification times and MIME types, which it would otherwise fetch per entry
+/// (extra, often slow, per-item work on many cloud backends). Separated out so the exact wire request
+/// is unit-testable, in both debug and release.
+fn list_request(fs: &str, path: &str) -> serde_json::Value {
+    serde_json::json!({
+        "fs": fs,
+        "remote": path,
+        "opt": { "dirsOnly": true, "noModTime": true, "noMimeType": true },
+    })
+}
+
 pub fn list_dirs(port: u16, fs: &str, path: &str) -> Result<Vec<DirEntry>> {
-    // A folder picker only needs directory names, so ask rclone to skip the modification times and
-    // MIME types it would otherwise fetch per entry (extra, often slow, per-item work on many cloud
-    // backends). This is why a cold remote listing here felt far slower than browsing a warm mount.
-    let reply = rc_at(
-        port,
-        "operations/list",
-        serde_json::json!({
-            "fs": fs,
-            "remote": path,
-            "opt": { "dirsOnly": true, "noModTime": true, "noMimeType": true },
-        }),
-    )?;
+    let reply = rc_at(port, "operations/list", list_request(fs, path))?;
     let items = reply
         .get("list")
         .and_then(|v| v.as_array())
@@ -347,6 +348,15 @@ pub fn activity(port: u16) -> Activity {
 mod tests {
     use super::*;
     use crate::jobs::{Endpoint, Job, Schedule, SyncMode};
+
+    #[test]
+    fn list_request_skips_slow_metadata() {
+        // Exactly what rc_at serializes onto the wire (params.to_string()).
+        let wire = list_request("remote:", "sub").to_string();
+        assert!(wire.contains("dirsOnly"), "wire: {wire}");
+        assert!(wire.contains("noModTime"), "wire: {wire}");
+        assert!(wire.contains("noMimeType"), "wire: {wire}");
+    }
 
     #[test]
     fn daemon_requires_auth() {
