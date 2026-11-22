@@ -226,10 +226,17 @@ pub struct DirEntry {
 /// via a daemon on `port`. Free-standing so a worker thread can browse without the handle.
 /// Sorted by name; files are excluded.
 pub fn list_dirs(port: u16, fs: &str, path: &str) -> Result<Vec<DirEntry>> {
+    // A folder picker only needs directory names, so ask rclone to skip the modification times and
+    // MIME types it would otherwise fetch per entry (extra, often slow, per-item work on many cloud
+    // backends). This is why a cold remote listing here felt far slower than browsing a warm mount.
     let reply = rc_at(
         port,
         "operations/list",
-        serde_json::json!({ "fs": fs, "remote": path, "opt": { "dirsOnly": true } }),
+        serde_json::json!({
+            "fs": fs,
+            "remote": path,
+            "opt": { "dirsOnly": true, "noModTime": true, "noMimeType": true },
+        }),
     )?;
     let items = reply
         .get("list")
