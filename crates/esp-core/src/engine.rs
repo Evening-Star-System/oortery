@@ -269,12 +269,43 @@ pub struct Mount {
 /// Mount `fs` (e.g. "gdrive:") at `mount_point` through the daemon on `port`. The mount
 /// lives as long as the daemon does.
 pub fn mount(port: u16, fs: &str, mount_point: &str) -> Result<()> {
+    prepare_mountpoint(mount_point)?;
     rc_at(
         port,
         "mount/mount",
         serde_json::json!({ "fs": fs, "mountPoint": mount_point }),
     )?;
     Ok(())
+}
+
+/// Ensure `mount_point` is an empty directory ready to mount onto. A previous session can leave a
+/// dead FUSE mount here (the daemon was killed before it could unmount): the kernel keeps a stale
+/// entry, so the path cannot be stat'd and `create_dir_all` reports "File exists (os error 17)".
+/// We detach a stale mount with a lazy, root-free `fusermount -uz` (harmless when nothing is
+/// mounted there) and retry once, so a re-mount after an unclean exit just works.
+fn prepare_mountpoint(mount_point: &str) -> Result<()> {
+    if std::fs::create_dir_all(mount_point).is_ok() {
+        return Ok(());
+    }
+    clear_stale_mount(mount_point);
+    std::fs::create_dir_all(mount_point)
+        .with_context(|| format!("preparing mountpoint {mount_point}"))
+}
+
+/// Best-effort detach of a (possibly dead) FUSE mount, without root. `fusermount` ships with FUSE,
+/// which rclone already needs to mount at all; newer systems name it `fusermount3`. Failure is
+/// ignored: if nothing is mounted there, the command simply errors and we fall through to the retry.
+fn clear_stale_mount(mount_point: &str) {
+    for prog in ["fusermount3", "fusermount"] {
+        let ok = Command::new(prog)
+            .args(["-u", "-z", mount_point])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if ok {
+            return;
+        }
+    }
 }
 
 /// Unmount whatever is at `mount_point`.
@@ -356,6 +387,19 @@ mod tests {
         assert!(wire.contains("dirsOnly"), "wire: {wire}");
         assert!(wire.contains("noModTime"), "wire: {wire}");
         assert!(wire.contains("noMimeType"), "wire: {wire}");
+    }
+
+    #[test]
+    fn prepare_mountpoint_creates_and_is_idempotent() {
+        let point =
+            std::env::temp_dir().join(format!("esp-mp-{}/nested/Internxt", std::process::id()));
+        let point = point.to_string_lossy().into_owned();
+        // Creates the full path, and a second call on the now-existing empty dir still succeeds
+        // (the common re-mount case must not error the way the old create_dir_all did on a stale mount).
+        prepare_mountpoint(&point).expect("first prepare");
+        assert!(std::path::Path::new(&point).is_dir());
+        prepare_mountpoint(&point).expect("idempotent prepare");
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&point).parent().unwrap());
     }
 
     #[test]

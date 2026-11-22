@@ -147,10 +147,8 @@ fn mount(ui: &Rc<Ui>, name: &str) {
         }
     };
     let point = point_for(name);
-    if let Err(e) = std::fs::create_dir_all(&point) {
-        ui.toast(&format!("Could not create {point}: {e}"));
-        return;
-    }
+    // The mountpoint is prepared inside esp_core::mount (it also clears a stale mount left by an
+    // unclean exit), so we do not create it here.
     // Mount on a worker thread: a cloud (e.g. Google Drive) can take seconds to initialise its
     // VFS, and doing that on the UI thread freezes the whole app.
     ui.toast(&format!("Mounting {name}\u{2026}"));
