@@ -120,6 +120,12 @@ impl Provider {
     }
 }
 
+/// Whether a backend id signs in via the browser OAuth flow (so a Reconnect re-runs sign-in rather
+/// than re-collecting form fields). Mirrors `Provider::needs_oauth` for a bare backend id.
+pub fn is_oauth_backend(backend: &str) -> bool {
+    OAUTH_BACKENDS.contains(&backend)
+}
+
 /// Backends whose sign-in is a real browser OAuth flow (verified to reach `config_is_local`).
 const OAUTH_BACKENDS: &[&str] = &[
     "box",

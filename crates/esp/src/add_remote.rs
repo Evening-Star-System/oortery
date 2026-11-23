@@ -794,6 +794,44 @@ fn oauth_page(
 
 /// Edit an existing remote: the same fields, prefilled from its current config, saved back with
 /// `rclone config update`. Password fields start blank (leave blank to keep the current value).
+/// Re-authenticate an existing remote whose token or login has gone stale, without removing and
+/// re-adding it (which would lose the remote's syncs/backups/mounts). OAuth clouds re-run the
+/// browser sign-in in place, refreshing the token; everything else re-opens its credential form so
+/// the user can re-enter the password or a fresh 2FA code and save.
+pub fn reconnect(ui: &Rc<Ui>, name: &str, backend: &str) {
+    if !esp_core::is_oauth_backend(backend) {
+        present_edit(ui, name);
+        return;
+    }
+    let port = match ui.ensure_rcd() {
+        Ok(r) => r.port(),
+        Err(e) => {
+            ui.fail("Could not start the engine", &format!("{e}"));
+            return;
+        }
+    };
+    ui.toast(&format!("Opening your browser to reconnect {name}\u{2026}"));
+    let (tx, rx) = async_channel::bounded(1);
+    let (n, b) = (name.to_string(), backend.to_string());
+    std::thread::spawn(move || {
+        let _ = tx.send_blocking(esp_core::connect::oauth_connect(port, &n, &b));
+    });
+    let (ui2, name2) = (ui.clone(), name.to_string());
+    glib::spawn_future_local(async move {
+        match rx.recv().await {
+            Ok(Ok(())) => {
+                crate::refresh_all(&ui2);
+                ui2.toast(&format!("Reconnected {name2}"));
+            }
+            Ok(Err(e)) => ui2.error(&format!(
+                "Could not reconnect: {}",
+                esp_core::friendly_error(&e.to_string())
+            )),
+            Err(_) => {}
+        }
+    });
+}
+
 pub fn present_edit(ui: &Rc<Ui>, name: &str) {
     let values = match esp_core::remote_values(name) {
         Ok(v) => v,

@@ -151,6 +151,16 @@ pub fn refresh(ui: &Rc<Ui>) {
             tag.add_css_class("caption");
             row.add_suffix(&tag);
             // Edit this remote's settings (prefilled form, saved with rclone config update).
+            // Reconnect: re-sign-in a remote whose token or login went stale, without losing it.
+            let reconnect = icon_button("view-refresh-symbolic", "Reconnect (sign in again)");
+            reconnect.set_valign(gtk::Align::Center);
+            reconnect.add_css_class("flat");
+            let (ui_rc, name_rc, backend_rc) = (ui.clone(), r.name.clone(), r.backend.clone());
+            reconnect.connect_clicked(move |_| {
+                add_remote::reconnect(&ui_rc, &name_rc, &backend_rc);
+            });
+            row.add_suffix(&reconnect);
+
             let edit = icon_button("document-edit-symbolic", "Edit this remote");
             edit.set_valign(gtk::Align::Center);
             edit.add_css_class("flat");
