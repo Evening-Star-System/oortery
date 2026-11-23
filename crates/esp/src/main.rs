@@ -839,8 +839,23 @@ fn build_ui(app: &adw::Application) {
     tray::setup(&ui);
 
     // Bring back whatever the user left mounted last time, so "stay mounted" survives restarts and
-    // logins (paired with Start-at-login in Preferences). Quiet and best-effort.
-    mounts::auto_remount(&ui);
+    // logins (paired with Start-at-login in Preferences). Quiet and best-effort. The Internxt bridge
+    // is a pm2 process that does NOT survive a reboot, so re-enable it first (if the user uses
+    // Internxt and is still signed in) off the UI thread (the CLI is Node, slow to start), then
+    // remount so a persisted Internxt mount reconnects. A quick no-op for everyone else.
+    {
+        let ui_b = ui.clone();
+        let (tx, rx) = async_channel::bounded(1);
+        std::thread::spawn(move || {
+            let _ = tx.send_blocking(esp_core::internxt::ensure_bridge());
+        });
+        glib::spawn_future_local(async move {
+            if let Ok(Ok(true)) = rx.recv().await {
+                ui_b.toast("Reconnected your Internxt bridge");
+            }
+            mounts::auto_remount(&ui_b);
+        });
+    }
 
     // Headless aid: auto-open the add-remote dialog for screenshots.
     if aid("ESP_DIALOG").is_some() {

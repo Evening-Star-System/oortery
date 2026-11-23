@@ -52,7 +52,21 @@ fn backend_hint(backend: &str) -> Option<&'static str> {
     match backend {
         "protondrive" => Some(
             "If you use two-factor authentication, put your current 6-digit code in the 2fa field. \
-             A separate mailbox password (two-password accounts) goes under Advanced settings.",
+             A separate mailbox password (two-password accounts) goes under Advanced settings. If a \
+             sign-in is refused right after several tries, wait a few minutes: Proton temporarily \
+             blocks repeated attempts.",
+        ),
+        "mega" => Some(
+            "Use your MEGA email and password. If you have two-factor authentication on, add your \
+             current 6-digit code in the 2fa field.",
+        ),
+        "filen" => Some(
+            "Filen needs your email and password plus an API key. Generate the API key in Filen \
+             under Settings, Account, then paste it here.",
+        ),
+        "pikpak" => Some(
+            "Use your PikPak username and password. If sign-in is refused, finish a login once in \
+             the PikPak app or website first (it can require a one-time human check), then retry.",
         ),
         "b2" => Some("Account is your Backblaze keyID, and Key is the applicationKey."),
         "webdav" => Some(

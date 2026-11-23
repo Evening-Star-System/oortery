@@ -129,11 +129,43 @@ pub fn start_bridge(password: &str) -> Result<()> {
         ]),
         "configuring the Internxt bridge",
     )?;
+    enable_bridge()?;
+    Ok(())
+}
+
+/// Start the bridge with its already-stored config (host/port/custom-auth creds persist in the
+/// CLI's own config across runs), without reconfiguring. Used to bring it back after a reboot.
+pub fn enable_bridge() -> Result<()> {
+    let cli = cli_path().context("the Internxt CLI is not installed")?;
     run_ok(
         Command::new(&cli).args(["webdav", "enable"]),
         "starting the Internxt bridge",
     )?;
     Ok(())
+}
+
+/// Whether any configured remote points at the local Internxt bridge, i.e. the user actually uses
+/// Internxt and the bridge is worth keeping up. Reads `rclone config dump`; false on any error.
+pub fn has_bridge_remote() -> bool {
+    let Ok(out) = Command::new("rclone").args(["config", "dump"]).output() else {
+        return false;
+    };
+    config_has_bridge_remote(&out.stdout)
+}
+
+/// The bridge runs as a pm2-managed process that does NOT survive a reboot, so on launch Oortery
+/// brings it back: if the user has a bridge remote and is still signed in but the bridge is down,
+/// start it again (no reconfigure needed). Returns whether the bridge is up afterwards. A no-op,
+/// `Ok(false)`, when the user does not use Internxt or needs to sign in again.
+pub fn ensure_bridge() -> Result<bool> {
+    if !has_bridge_remote() || !is_logged_in() {
+        return Ok(false);
+    }
+    if bridge_online() {
+        return Ok(true);
+    }
+    enable_bridge()?;
+    Ok(bridge_online())
 }
 
 /// The whole Internxt connect, once signed in: pick a random bridge password, configure + start the
@@ -201,6 +233,21 @@ fn run_ok(cmd: &mut Command, ctx: &str) -> Result<()> {
     Ok(())
 }
 
+/// Does an `rclone config dump` JSON hold a WebDAV remote pointed at our local bridge URL?
+fn config_has_bridge_remote(dump: &[u8]) -> bool {
+    let url = bridge_url();
+    serde_json::from_slice::<serde_json::Value>(dump)
+        .ok()
+        .and_then(|v| v.as_object().cloned())
+        .map(|remotes| {
+            remotes.values().any(|cfg| {
+                cfg.get("type").and_then(|t| t.as_str()) == Some("webdav")
+                    && cfg.get("url").and_then(|u| u.as_str()) == Some(url.as_str())
+            })
+        })
+        .unwrap_or(false)
+}
+
 /// `whoami --json` reports `{"success": bool, ...}`; true means a user is signed in.
 fn parse_logged_in(stdout: &[u8]) -> bool {
     serde_json::from_slice::<serde_json::Value>(stdout)
@@ -248,6 +295,17 @@ mod tests {
             br#"{"success": true, "message": "Internxt WebDAV server status: offline", "action": "status"}"#
         ));
         assert!(!parse_bridge_online(b"{}"));
+    }
+
+    #[test]
+    fn bridge_remote_is_detected_by_type_and_url() {
+        // A WebDAV remote at the bridge URL counts; other webdav remotes and other backends do not.
+        let yes = br#"{"inxt":{"type":"webdav","url":"http://127.0.0.1:3005"},"s3":{"type":"s3"}}"#;
+        assert!(config_has_bridge_remote(yes));
+        let other_webdav = br#"{"nc":{"type":"webdav","url":"https://cloud.example.com/dav"}}"#;
+        assert!(!config_has_bridge_remote(other_webdav));
+        assert!(!config_has_bridge_remote(br#"{"gd":{"type":"drive"}}"#));
+        assert!(!config_has_bridge_remote(b"not json"));
     }
 
     #[test]
