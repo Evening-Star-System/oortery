@@ -288,7 +288,17 @@ fn preset_page(
     }
     prefs.add(&gopts);
 
-    let create = gtk::Button::with_label("Create");
+    // A visible connection result, so a wrong key shows a plain reason inline instead of the remote
+    // being made, silently tested, deleted, and reported only as a fleeting toast.
+    let status = gtk::Label::new(None);
+    status.set_wrap(true);
+    status.set_xalign(0.0);
+    status.set_visible(false);
+    let gstatus = adw::PreferencesGroup::new();
+    gstatus.add(&status);
+    prefs.add(&gstatus);
+
+    let create = gtk::Button::with_label("Connect");
     create.add_css_class("suggested-action");
     header.pack_end(&create);
 
@@ -317,6 +327,11 @@ fn preset_page(
 
         btn.set_sensitive(false);
         btn.set_label("Connecting...");
+        status.remove_css_class("error");
+        status.remove_css_class("success");
+        status.add_css_class("dim");
+        status.set_text("Testing the connection\u{2026}");
+        status.set_visible(true);
         let (tx, rx) = async_channel::bounded(1);
         let (n, bk) = (name.clone(), bucket.clone());
         std::thread::spawn(move || {
@@ -334,22 +349,47 @@ fn preset_page(
                 });
             let _ = tx.send_blocking(res.map_err(|e| e.to_string()));
         });
-        let (ui_c, dlg_c, name_c, btn_c) = (ui2.clone(), dlg2.clone(), name.clone(), btn.clone());
+        let (ui_c, dlg_c, name_c, btn_c, status_c, bucket_c) = (
+            ui2.clone(),
+            dlg2.clone(),
+            name.clone(),
+            btn.clone(),
+            status.clone(),
+            bucket.clone(),
+        );
         glib::spawn_future_local(async move {
             match rx.recv().await {
                 Ok(Ok(())) => {
-                    dlg_c.close();
-                    crate::refresh_all(&ui_c);
-                    ui_c.toast(&format!("Added {name_c}"));
+                    // Show the green confirmation inline, then close a beat later so the user sees
+                    // their storage was actually reached before the dialog goes away.
+                    status_c.remove_css_class("dim");
+                    status_c.add_css_class("success");
+                    status_c.set_text(&if bucket_c.is_empty() {
+                        "Connected.".to_string()
+                    } else {
+                        format!("Connected. Found your bucket \u{201c}{bucket_c}\u{201d}.")
+                    });
+                    let (ui_d, dlg_d, name_d) = (ui_c.clone(), dlg_c.clone(), name_c.clone());
+                    glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(900),
+                        move || {
+                            dlg_d.close();
+                            crate::refresh_all(&ui_d);
+                            ui_d.toast(&format!("Added {name_d}"));
+                        },
+                    );
                 }
                 Ok(Err(e)) => {
                     btn_c.set_sensitive(true);
-                    btn_c.set_label("Create");
-                    ui_c.error(&format!("Could not add: {}", esp_core::friendly_error(&e)));
+                    btn_c.set_label("Connect");
+                    status_c.remove_css_class("dim");
+                    status_c.add_css_class("error");
+                    status_c.set_text(&esp_core::friendly_error(&e));
                 }
                 Err(_) => {
                     btn_c.set_sensitive(true);
-                    btn_c.set_label("Create");
+                    btn_c.set_label("Connect");
+                    status_c.set_visible(false);
                 }
             }
         });

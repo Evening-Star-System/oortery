@@ -59,15 +59,15 @@ pub const PRESETS: &[Preset] = &[
                switch R2 on; there is no charge while you stay under the free tier. Region stays \
                \u{201c}auto\u{201d}.",
         steps: &[
-            "In the Cloudflare dashboard, open R2 and choose Create bucket. Give it any name you like.",
-            "Open the bucket's Settings and copy the part of its S3 API endpoint before \u{201c}.r2.cloudflarestorage.com\u{201d}: that is your Account ID.",
+            "In the Cloudflare dashboard, open R2 and choose Create bucket. Use that name in the Bucket field below.",
+            "Open the bucket's Settings and paste its whole S3 API endpoint into Account ID below (or just the account part before \u{201c}.r2.cloudflarestorage.com\u{201d}); Oortery figures out the rest.",
             "Back in R2, open Manage R2 API Tokens and create an Account API token with Object Read & Write, scoped to just this one bucket.",
             "Copy the Access Key ID and Secret Access Key into the fields below. The secret is shown only once.",
         ],
         fields: &[
             PresetField {
                 key: "account_id",
-                label: "Account ID",
+                label: "Account ID (or paste the S3 endpoint)",
                 secret: false,
                 required: true,
             },
@@ -170,6 +170,38 @@ pub fn preset(id: &str) -> Option<&'static Preset> {
 /// empty for a preset without one).
 pub type PresetBuild = (String, Vec<(String, String)>, String);
 
+/// Extract a Cloudflare R2 account id from whatever the user pasted: a bare id, or the full S3 API
+/// endpoint they were already looking at (`https://<id>.r2.cloudflarestorage.com`). Paste-smart, so
+/// a user does not have to hand-trim the one string Cloudflare shows them.
+pub fn r2_account_id(input: &str) -> String {
+    let s = input.trim();
+    if let Some(idx) = s.find(".r2.cloudflarestorage.com") {
+        let head = &s[..idx];
+        return head.rsplit("://").next().unwrap_or(head).to_string();
+    }
+    s.to_string()
+}
+
+/// Best-effort parse of an AWS-style region label from an S3 endpoint host, e.g.
+/// `https://s3.us-east-1.wasabisys.com` -> `us-east-1`, so an S3-compatible connection can fill the
+/// region the user already encoded in their endpoint. `None` when no region-shaped label is present.
+pub fn region_from_endpoint(endpoint: &str) -> Option<String> {
+    let host = endpoint.trim().rsplit("://").next().unwrap_or(endpoint);
+    let host = host.split('/').next().unwrap_or(host);
+    for label in host.split('.') {
+        let parts: Vec<&str> = label.split('-').collect();
+        if parts.len() == 3
+            && (2..=3).contains(&parts[0].len())
+            && parts[0].chars().all(|c| c.is_ascii_lowercase())
+            && !parts[2].is_empty()
+            && parts[2].chars().all(|c| c.is_ascii_digit())
+        {
+            return Some(label.to_string());
+        }
+    }
+    None
+}
+
 /// Assemble the rclone backend id, config params, and target bucket for a preset from the user's
 /// field values. Returns `None` for an unknown preset id. Empty optional fields are dropped so
 /// rclone uses its default (e.g. no region). The bucket is returned separately (not a config key):
@@ -193,7 +225,7 @@ pub fn build(id: &str, values: &BTreeMap<String, String>) -> Option<PresetBuild>
                 "endpoint",
                 format!(
                     "https://{}.r2.cloudflarestorage.com",
-                    get("account_id").trim()
+                    r2_account_id(&get("account_id"))
                 ),
             );
             push("region", "auto".into());
@@ -211,7 +243,16 @@ pub fn build(id: &str, values: &BTreeMap<String, String>) -> Option<PresetBuild>
             push("access_key_id", get("access_key_id"));
             push("secret_access_key", get("secret_access_key"));
             push("endpoint", get("endpoint"));
-            push("region", get("region"));
+            // Use the region the user typed, else derive it from the endpoint they pasted.
+            let region = {
+                let r = get("region");
+                if r.trim().is_empty() {
+                    region_from_endpoint(&get("endpoint")).unwrap_or_default()
+                } else {
+                    r
+                }
+            };
+            push("region", region);
             "s3"
         }
         "b2" => {
@@ -264,5 +305,46 @@ mod tests {
     #[test]
     fn unknown_preset_is_none() {
         assert!(build("nope", &BTreeMap::new()).is_none());
+    }
+
+    #[test]
+    fn r2_account_id_accepts_a_pasted_endpoint() {
+        assert_eq!(r2_account_id("abc123"), "abc123");
+        assert_eq!(
+            r2_account_id("https://abc123.r2.cloudflarestorage.com"),
+            "abc123"
+        );
+        assert_eq!(
+            r2_account_id("  abc123.r2.cloudflarestorage.com/mybucket "),
+            "abc123"
+        );
+    }
+
+    #[test]
+    fn region_parsed_from_endpoint_host() {
+        assert_eq!(
+            region_from_endpoint("https://s3.us-east-1.wasabisys.com").as_deref(),
+            Some("us-east-1")
+        );
+        assert_eq!(
+            region_from_endpoint("https://s3.ap-southeast-2.amazonaws.com").as_deref(),
+            Some("ap-southeast-2")
+        );
+        // A plain MinIO host has no region label.
+        assert_eq!(region_from_endpoint("https://minio.example.com"), None);
+    }
+
+    #[test]
+    fn s3compat_fills_region_from_endpoint_when_blank() {
+        let mut v = BTreeMap::new();
+        v.insert(
+            "endpoint".to_string(),
+            "https://s3.us-west-1.wasabisys.com".to_string(),
+        );
+        v.insert("bucket".to_string(), "b".to_string());
+        v.insert("access_key_id".to_string(), "AK".to_string());
+        v.insert("secret_access_key".to_string(), "SK".to_string());
+        let (_b, params, _bk) = build("s3compat", &v).unwrap();
+        assert!(params.contains(&("region".into(), "us-west-1".into())));
     }
 }
