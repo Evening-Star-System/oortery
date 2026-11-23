@@ -46,6 +46,10 @@ pub fn page() -> PeersPage {
         .title("This device")
         .build();
     let qr = gtk::DrawingArea::new();
+    // A QR image means nothing to a screen reader; name it and point to the text code beside it.
+    qr.update_property(&[gtk::accessible::Property::Label(
+        "QR code for this device. The text code is shown just below it.",
+    )]);
     qr.set_content_width(200);
     qr.set_content_height(200);
     qr.set_halign(gtk::Align::Center);
