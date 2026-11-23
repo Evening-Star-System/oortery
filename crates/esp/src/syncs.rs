@@ -490,29 +490,39 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<Job>) {
     prefs.add(&gdst);
     wire_browse(ui, options.clone(), &dst_combo, &dst_path, &dst_browse);
 
-    let gmode = adw::PreferencesGroup::builder().title("Mode").build();
-    let mode_model = gtk::StringList::new(&[
-        "Copy (add and update, never delete)",
-        "Mirror (make identical, deletes extras)",
-    ]);
-    let mode_combo = adw::ComboRow::builder()
-        .title("How to reconcile")
-        .model(&mode_model)
+    // What happens, as two clear choices with the consequence spelled out on each, so the
+    // destructive one can never be picked without seeing that it deletes. Copy is the safe default.
+    let gmode = adw::PreferencesGroup::builder()
+        .title("What happens")
         .build();
-    gmode.add(&mode_combo);
-    let warn = adw::ActionRow::builder()
-        .title("Mirror deletes files")
+    let copy_radio = gtk::CheckButton::new();
+    copy_radio.set_valign(gtk::Align::Center);
+    let copy_row = adw::ActionRow::builder()
+        .title("Copy")
+        .subtitle("Adds new and changed files to the destination. Nothing is ever deleted.")
+        .activatable(true)
+        .build();
+    copy_row.add_prefix(&copy_radio);
+    copy_row.set_activatable_widget(Some(&copy_radio));
+    let mirror_radio = gtk::CheckButton::new();
+    mirror_radio.set_valign(gtk::Align::Center);
+    mirror_radio.set_group(Some(&copy_radio));
+    let mirror_row = adw::ActionRow::builder()
+        .title("Mirror")
         .subtitle(
-            "Anything on the destination that is not on the source is removed. Use with care.",
+            "Makes the destination match the source exactly. Files only on the destination are \
+             deleted.",
         )
+        .activatable(true)
         .build();
-    warn.add_prefix(&gtk::Image::from_icon_name("dialog-warning-symbolic"));
-    warn.set_visible(false);
-    gmode.add(&warn);
-    let warn_c = warn.clone();
-    mode_combo.connect_selected_notify(move |c| {
-        warn_c.set_visible(c.selected() == 1);
-    });
+    mirror_row.add_prefix(&mirror_radio);
+    mirror_row.set_activatable_widget(Some(&mirror_radio));
+    let warn_icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
+    warn_icon.set_tooltip_text(Some("Mirror can delete files on the destination."));
+    mirror_row.add_suffix(&warn_icon);
+    copy_radio.set_active(true);
+    gmode.add(&copy_row);
+    gmode.add(&mirror_row);
     prefs.add(&gmode);
 
     // When: run on its own, on a schedule (while Oortery is open), optionally at a chosen time.
@@ -530,7 +540,8 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<Job>) {
         src_path.set_text(&j.src.path);
         dst_combo.set_selected(combo_index_for(&options, &j.dst));
         dst_path.set_text(&j.dst.path);
-        mode_combo.set_selected(u32::from(j.mode == SyncMode::Mirror));
+        mirror_radio.set_active(j.mode == SyncMode::Mirror);
+        copy_radio.set_active(j.mode != SyncMode::Mirror);
     }
 
     let scroll = gtk::ScrolledWindow::new();
@@ -563,7 +574,7 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<Job>) {
             ui2.toast(&msg);
             return;
         }
-        let mode = if mode_combo.selected() == 1 {
+        let mode = if mirror_radio.is_active() {
             SyncMode::Mirror
         } else {
             SyncMode::Copy
