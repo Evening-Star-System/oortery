@@ -138,22 +138,19 @@ fn job_row(ui: &Rc<Ui>, job: BackupJob) -> adw::ActionRow {
 
     // Verify integrity: the research's #1 trust signal. A deliberate action (not auto-run on a
     // slow cloud), it runs restic check off-thread and reports whether the backup is restorable.
-    let verify = gtk::Button::from_icon_name("security-high-symbolic");
-    verify.set_tooltip_text(Some("Verify this backup is intact"));
+    let verify = crate::icon_button("security-high-symbolic", "Verify this backup is intact");
     verify.set_valign(gtk::Align::Center);
     verify.add_css_class("flat");
     row.add_suffix(&verify);
     let (ui_v, job_v) = (ui.clone(), job.clone());
     verify.connect_clicked(move |_| verify_backup(&ui_v, &job_v));
 
-    let snaps = gtk::Button::from_icon_name("document-open-recent-symbolic");
-    snaps.set_tooltip_text(Some("Snapshots and restore"));
+    let snaps = crate::icon_button("document-open-recent-symbolic", "Snapshots and restore");
     snaps.set_valign(gtk::Align::Center);
     snaps.add_css_class("flat");
     row.add_suffix(&snaps);
 
-    let run = gtk::Button::from_icon_name("media-playback-start-symbolic");
-    run.set_tooltip_text(Some("Back up now"));
+    let run = crate::icon_button("media-playback-start-symbolic", "Back up now");
     run.set_valign(gtk::Align::Center);
     run.add_css_class("flat");
     row.add_suffix(&run);
@@ -466,8 +463,7 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
         .description("The folder on this computer to back up.")
         .build();
     let src_path = adw::EntryRow::builder().title("Folder").build();
-    let src_browse = gtk::Button::from_icon_name("folder-open-symbolic");
-    src_browse.set_tooltip_text(Some("Browse folders"));
+    let src_browse = crate::icon_button("folder-open-symbolic", "Browse folders");
     src_browse.set_valign(gtk::Align::Center);
     src_browse.add_css_class("flat");
     src_path.add_suffix(&src_browse);

@@ -139,16 +139,14 @@ pub fn refresh(ui: &Rc<Ui>) {
             tag.add_css_class("caption");
             row.add_suffix(&tag);
             // Edit this remote's settings (prefilled form, saved with rclone config update).
-            let edit = gtk::Button::from_icon_name("document-edit-symbolic");
-            edit.set_tooltip_text(Some("Edit this remote"));
+            let edit = icon_button("document-edit-symbolic", "Edit this remote");
             edit.set_valign(gtk::Align::Center);
             edit.add_css_class("flat");
             let (ui_e, name_e) = (ui.clone(), r.name.clone());
             edit.connect_clicked(move |_| add_remote::present_edit(&ui_e, &name_e));
             row.add_suffix(&edit);
             // Remove this remote (its connection config only; never the files in the cloud).
-            let remove = gtk::Button::from_icon_name("user-trash-symbolic");
-            remove.set_tooltip_text(Some("Remove this remote"));
+            let remove = icon_button("user-trash-symbolic", "Remove this remote");
             remove.set_valign(gtk::Align::Center);
             remove.add_css_class("flat");
             let (ui_r, name_r) = (ui.clone(), r.name.clone());
@@ -247,6 +245,17 @@ pub fn default_save_dir() -> Option<std::path::PathBuf> {
     let home = esp_core::home_dir()?;
     let downloads = home.join("Downloads");
     Some(if downloads.is_dir() { downloads } else { home })
+}
+
+/// An icon-only button that a screen reader can announce: the tooltip (what a sighted user sees on
+/// hover) and the accessible Label (what Orca reads) carry the same words. GTK maps a tooltip only
+/// to the accessible *description*, not the *name*, so an icon button with just a tooltip reads as a
+/// bare "button" - use this for every icon-only button so each per-row action is distinguishable.
+pub(crate) fn icon_button(icon: &str, label: &str) -> gtk::Button {
+    let b = gtk::Button::from_icon_name(icon);
+    b.set_tooltip_text(Some(label));
+    b.update_property(&[gtk::accessible::Property::Label(label)]);
+    b
 }
 
 fn prefer_bundled_tools() {
@@ -582,8 +591,7 @@ fn build_ui(app: &adw::Application) {
     sidebar.set_content(Some(&sidebar_scroll));
 
     let content_header = adw::HeaderBar::new();
-    let add_btn = gtk::Button::from_icon_name("list-add-symbolic");
-    add_btn.set_tooltip_text(Some("Add a remote"));
+    let add_btn = icon_button("list-add-symbolic", "Add a remote");
     add_btn.add_css_class("suggested-action");
     content_header.pack_start(&add_btn);
     let title = adw::WindowTitle::new("Overview", "");

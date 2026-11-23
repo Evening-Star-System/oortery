@@ -16,8 +16,7 @@ pub fn present(ui: &Rc<Ui>) {
 
     let toolbar = adw::ToolbarView::new();
     let header = adw::HeaderBar::new();
-    let copy_btn = gtk::Button::from_icon_name("edit-copy-symbolic");
-    copy_btn.set_tooltip_text(Some("Copy all"));
+    let copy_btn = crate::icon_button("edit-copy-symbolic", "Copy all");
     let save_btn = gtk::Button::with_label("Save...");
     header.pack_start(&copy_btn);
     header.pack_end(&save_btn);

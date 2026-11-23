@@ -72,8 +72,7 @@ pub fn page() -> PeersPage {
     id_label.set_selectable(true);
     id_label.set_justify(gtk::Justification::Center);
     id_label.set_max_width_chars(34);
-    let copy_btn = gtk::Button::from_icon_name("edit-copy-symbolic");
-    copy_btn.set_tooltip_text(Some("Copy this device's code"));
+    let copy_btn = crate::icon_button("edit-copy-symbolic", "Copy this device's code");
     copy_btn.set_valign(gtk::Align::Center);
     copy_btn.add_css_class("flat");
     // The code lives in a bordered chip with the copy button, centered under the QR.

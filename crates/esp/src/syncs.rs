@@ -158,16 +158,14 @@ fn job_row(ui: &Rc<Ui>, job: Job) -> adw::ActionRow {
     row.add_suffix(&bar);
 
     // Pre-flight: catch names a strict cloud will silently drop, before they vanish.
-    let check = gtk::Button::from_icon_name("edit-find-symbolic");
-    check.set_tooltip_text(Some("Check names for cloud problems"));
+    let check = crate::icon_button("edit-find-symbolic", "Check names for cloud problems");
     check.set_valign(gtk::Align::Center);
     check.add_css_class("flat");
     row.add_suffix(&check);
     let (ui_c, job_c) = (ui.clone(), job.clone());
     check.connect_clicked(move |_| present_preflight(&ui_c, &job_c));
 
-    let run = gtk::Button::from_icon_name("media-playback-start-symbolic");
-    run.set_tooltip_text(Some("Run this sync now"));
+    let run = crate::icon_button("media-playback-start-symbolic", "Run this sync now");
     run.set_valign(gtk::Align::Center);
     run.add_css_class("flat");
     row.add_suffix(&run);
@@ -609,8 +607,7 @@ pub(crate) fn endpoint_rows(labels: &[&str]) -> (adw::ComboRow, adw::EntryRow, g
         .model(&model)
         .build();
     let path = adw::EntryRow::builder().title("Path").build();
-    let browse = gtk::Button::from_icon_name("folder-open-symbolic");
-    browse.set_tooltip_text(Some("Browse folders"));
+    let browse = crate::icon_button("folder-open-symbolic", "Browse folders");
     browse.set_valign(gtk::Align::Center);
     browse.add_css_class("flat");
     path.add_suffix(&browse);
@@ -782,7 +779,9 @@ pub(crate) fn row_menu() -> (gtk::MenuButton, gtk::Button, gtk::Button, gtk::Pop
     let menu = gtk::MenuButton::builder()
         .icon_name("view-more-symbolic")
         .valign(gtk::Align::Center)
+        .tooltip_text("More actions (edit, delete)")
         .build();
+    menu.update_property(&[gtk::accessible::Property::Label("More actions")]);
     menu.add_css_class("flat");
     let b = gtk::Box::new(gtk::Orientation::Vertical, 2);
     b.set_margin_top(4);
