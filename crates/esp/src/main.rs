@@ -357,7 +357,7 @@ fn load_css() {
         .qr-card { background: #ffffff; border-radius: 16px; padding: 12px; }
         .code-chip { background: alpha(#b4baff, 0.08); border: 1px solid alpha(#b4baff, 0.22);
                      border-radius: 12px; padding: 6px 8px 6px 12px; }
-        .dim { opacity: 0.6; }
+        .dim { opacity: 0.72; }
 
         /* The 'are we OK?' banner. Status is carried by an icon AND a tinted left edge + glow,
            never colour alone. Periwinkle is the brand accent, so red/amber stay free for alerts. */
@@ -378,7 +378,7 @@ fn load_css() {
                      background: linear-gradient(to bottom, alpha(#ffffff, 0.06), alpha(#8a7cf0, 0.03));
                      border: 1px solid alpha(@accent_color, 0.12); }
         .stat-number { font-size: 2.3rem; font-weight: 800; }
-        .stat-caption { opacity: 0.55; font-size: 0.82rem; letter-spacing: 0.04em; }
+        .stat-caption { opacity: 0.72; font-size: 0.82rem; letter-spacing: 0.04em; }
         .stat-accent { color: @accent_color; }
 
         /* Selected nav reads as a soft periwinkle pill. */
@@ -981,6 +981,14 @@ fn overview_page(node_count: &Rc<Cell<usize>>) -> OverviewWidgets {
     // repainting on every vsync is needless CPU that can make the whole UI feel choppy under load.
     let last_hero_draw = Cell::new(0i64);
     hero.add_tick_callback(move |area, clock| {
+        // Honor the system "reduce motion" / disable-animations preference: hold a single static
+        // frame instead of the continuous drift, for motion-sensitive and low-vision users.
+        let animate = gtk::Settings::default()
+            .map(|s| s.is_gtk_enable_animations())
+            .unwrap_or(true);
+        if !animate {
+            return glib::ControlFlow::Continue;
+        }
         let now = clock.frame_time();
         phase.set(now as f64 / 1_000_000.0);
         if now - last_hero_draw.get() >= 33_000 {

@@ -91,9 +91,17 @@ fn picker_page(
     list.set_selection_mode(gtk::SelectionMode::None);
 
     for p in &ui.providers {
+        // Lead with the human description ("Amazon S3"), not the raw rclone id ("s3"), which read as
+        // engineer jargon to a normal user. Keep the id as the dim subtitle for those who know it.
+        let human = first_line(&p.description);
+        let title = if human.is_empty() {
+            p.name.as_str()
+        } else {
+            human
+        };
         let row = adw::ActionRow::builder()
-            .title(&p.name)
-            .subtitle(first_line(&p.description))
+            .title(title)
+            .subtitle(&p.name)
             .activatable(true)
             .build();
         row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));

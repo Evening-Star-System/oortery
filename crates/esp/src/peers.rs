@@ -88,6 +88,25 @@ pub fn page() -> PeersPage {
     me_box.append(&qr_card);
     me_box.append(&qr_caption);
     me_box.append(&code_chip);
+
+    // Newcomers often have nothing to scan the code with. Syncing a phone uses a Syncthing app
+    // (that is the open protocol Oortery pairs over); point them to where to get one, with one
+    // plain sentence on what the code is.
+    let get_app = gtk::LinkButton::with_label(
+        "https://syncthing.net/downloads/",
+        "Don't have a sync app yet? Get one",
+    );
+    get_app.add_css_class("caption");
+    get_app.set_halign(gtk::Align::Center);
+    let what = gtk::Label::new(Some(
+        "A device code is this device's public address; share it to pair, it is not a secret.",
+    ));
+    what.add_css_class("caption");
+    what.add_css_class("dim");
+    what.set_wrap(true);
+    what.set_justify(gtk::Justification::Center);
+    me_box.append(&get_app);
+    me_box.append(&what);
     me_group.add(&me_box);
     col.append(&me_group);
 
