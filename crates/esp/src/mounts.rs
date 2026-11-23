@@ -24,7 +24,8 @@ pub fn page() -> (gtk::Widget, gtk::ListBox) {
     heading.add_css_class("title-4");
     heading.set_xalign(0.0);
     let sub = gtk::Label::new(Some(
-        "Open a cloud as a folder on this computer. No copying, no waiting.",
+        "Open a cloud as a folder on this computer, nothing downloaded up front. Best for browsing \
+         or opening files on demand.",
     ));
     sub.add_css_class("dim");
     sub.set_xalign(0.0);

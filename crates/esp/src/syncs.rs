@@ -30,7 +30,9 @@ pub fn page() -> (gtk::Widget, gtk::ListBox, gtk::Button) {
     let heading = gtk::Label::new(Some("Syncs"));
     heading.add_css_class("title-4");
     heading.set_xalign(0.0);
-    let sub = gtk::Label::new(Some("Keep two places in step. Run one and watch it move."));
+    let sub = gtk::Label::new(Some(
+        "Copy a folder to a cloud and keep both in step. Best for files you actively work with.",
+    ));
     sub.add_css_class("dim");
     sub.set_xalign(0.0);
     titles.append(&heading);

@@ -34,7 +34,7 @@ pub fn page() -> (gtk::Widget, gtk::ListBox, gtk::Button) {
     heading.add_css_class("title-4");
     heading.set_xalign(0.0);
     let sub = gtk::Label::new(Some(
-        "Versioned, encrypted snapshots you can restore from. Local or any cloud.",
+        "Encrypted, versioned snapshots to restore from. Best for recovering lost or changed files.",
     ));
     sub.add_css_class("dim");
     sub.set_xalign(0.0);
