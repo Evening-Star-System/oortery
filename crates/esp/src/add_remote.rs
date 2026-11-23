@@ -45,6 +45,36 @@ fn first_line(s: &str) -> &str {
 /// A re-render hook for the Internxt wizard: an action's success calls it to advance the step.
 type RenderHook = Rc<dyn Fn()>;
 
+/// A big, friendly provider card for the Popular grid: an icon, the human name, and a plain
+/// one-line description of what connecting it involves. Warmer and more inviting for a newcomer
+/// than a dense list row.
+fn provider_card(icon: &str, title: &str, desc: &str) -> gtk::Button {
+    let col = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    col.set_margin_top(14);
+    col.set_margin_bottom(14);
+    col.set_margin_start(14);
+    col.set_margin_end(14);
+    let img = gtk::Image::from_icon_name(icon);
+    img.set_pixel_size(30);
+    img.set_halign(gtk::Align::Start);
+    let name = gtk::Label::new(Some(title));
+    name.add_css_class("title-4");
+    name.set_xalign(0.0);
+    name.set_wrap(true);
+    let sub = gtk::Label::new(Some(desc));
+    sub.add_css_class("dim");
+    sub.add_css_class("caption");
+    sub.set_xalign(0.0);
+    sub.set_wrap(true);
+    col.append(&img);
+    col.append(&name);
+    col.append(&sub);
+    let btn = gtk::Button::builder().child(&col).build();
+    btn.add_css_class("card");
+    btn.set_hexpand(true);
+    btn
+}
+
 /// A plain-language note for backends with a known gotcha, shown above the form so a new user is
 /// not left guessing. (Internxt has no entry here: it routes to its own guided helper, not this
 /// form, because its native login is dead.)
@@ -148,42 +178,38 @@ fn picker_page(
     let popular = gtk::Label::new(Some("Popular"));
     popular.set_xalign(0.0);
     popular.add_css_class("heading");
-    let presets_list = gtk::ListBox::new();
-    presets_list.add_css_class("boxed-list");
+    let presets_list = gtk::FlowBox::new();
     presets_list.set_selection_mode(gtk::SelectionMode::None);
+    presets_list.set_min_children_per_line(2);
+    presets_list.set_max_children_per_line(2);
+    presets_list.set_column_spacing(10);
+    presets_list.set_row_spacing(10);
+    presets_list.set_homogeneous(true);
     for key in POPULAR {
         // Prefer a stupid-easy preset if one exists for this key (e.g. B2); otherwise the provider.
         if let Some(preset) = esp_core::presets::preset(key) {
-            let row = adw::ActionRow::builder()
-                .title(preset.name)
-                .subtitle(preset.blurb)
-                .activatable(true)
-                .build();
-            row.add_prefix(&gtk::Image::from_icon_name("folder-remote-symbolic"));
-            row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+            let card = provider_card("folder-remote-symbolic", preset.name, preset.blurb);
             let (ui2, nav2, dlg2) = (ui.clone(), nav.clone(), dialog.clone());
-            row.connect_activated(move |_| {
+            card.connect_clicked(move |_| {
                 nav2.push(&preset_page(&ui2, preset, &dlg2));
             });
-            presets_list.append(&row);
+            presets_list.append(&card);
         } else if let Some(p) = ui.providers.iter().find(|p| &p.name == key).cloned() {
             let subtitle = if p.needs_oauth() {
                 "Sign in with your browser"
             } else {
                 "Fill in a short form"
             };
-            let row = adw::ActionRow::builder()
-                .title(first_line(&p.description))
-                .subtitle(subtitle)
-                .activatable(true)
-                .build();
-            row.add_prefix(&gtk::Image::from_icon_name("folder-remote-symbolic"));
-            row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+            let card = provider_card(
+                "folder-remote-symbolic",
+                first_line(&p.description),
+                subtitle,
+            );
             let (ui2, nav2, dlg2) = (ui.clone(), nav.clone(), dialog.clone());
-            row.connect_activated(move |_| {
+            card.connect_clicked(move |_| {
                 nav2.push(&config_page(&ui2, &p, &dlg2));
             });
-            presets_list.append(&row);
+            presets_list.append(&card);
         }
     }
     let all_label = gtk::Label::new(Some("Or pick any provider"));
