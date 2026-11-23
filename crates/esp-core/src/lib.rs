@@ -16,6 +16,7 @@ pub mod dashboard;
 pub mod desktop;
 pub mod diag;
 pub mod engine;
+pub mod internxt;
 pub mod jobs;
 pub mod lock;
 pub mod mountkeep;

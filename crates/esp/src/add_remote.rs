@@ -42,15 +42,14 @@ fn first_line(s: &str) -> &str {
     s.lines().next().unwrap_or(s)
 }
 
+/// A re-render hook for the Internxt wizard: an action's success calls it to advance the step.
+type RenderHook = Rc<dyn Fn()>;
+
 /// A plain-language note for backends with a known gotcha, shown above the form so a new user is
-/// not left guessing (and, for Internxt, so a 2FA account does not just fail with a 401).
+/// not left guessing. (Internxt has no entry here: it routes to its own guided helper, not this
+/// form, because its native login is dead.)
 fn backend_hint(backend: &str) -> Option<&'static str> {
     match backend {
-        "internxt" => Some(
-            "Use the exact email and password from your Internxt account (the same as internxt.com). \
-             A 'wrong credentials' error usually means a typo or an unusual character in the password; \
-             accounts with two-factor are not supported by the engine yet.",
-        ),
         "protondrive" => Some(
             "If you use two-factor authentication, put your current 6-digit code in the 2fa field. \
              A separate mailbox password (two-password accounts) goes under Advanced settings.",
@@ -328,11 +327,259 @@ fn preset_page(
         .build()
 }
 
+/// Internxt helper: a small wizard over Internxt's own CLI WebDAV bridge. Internxt moved to
+/// browser login, so the native backend 401s; here we (optionally install the CLI on demand, then)
+/// sign in through the browser and stand up a local bridge, ending with a working WebDAV remote.
+/// Each CLI call runs off the UI thread (Node is slow to start; blocking here would freeze the app,
+/// the same failure mode we fixed for mounts).
+fn internxt_page(ui: &Rc<Ui>, dialog: &adw::Dialog) -> adw::NavigationPage {
+    let prefs = adw::PreferencesPage::new();
+
+    let intro = adw::PreferencesGroup::builder()
+        .title("Connect Internxt")
+        .description(
+            "Internxt now signs you in through your browser, so Oortery connects through \
+             Internxt's own secure bridge. Your files stay end-to-end encrypted: the bridge does \
+             the crypto on your machine, and Oortery never sees your password.",
+        )
+        .build();
+    prefs.add(&intro);
+
+    let gname = adw::PreferencesGroup::new();
+    let name_row = adw::EntryRow::builder().title("Name").build();
+    name_row.set_text("Internxt");
+    gname.add(&name_row);
+    prefs.add(&gname);
+
+    // The step area is rebuilt from the live readiness after each action, so the wizard advances
+    // install -> sign in -> connect without the user navigating anywhere.
+    let step_group = adw::PreferencesGroup::new();
+    let step_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    step_box.set_margin_top(4);
+    step_group.add(&step_box);
+    prefs.add(&step_group);
+
+    // A self-referencing render closure: an action's success calls it again to show the next step.
+    let render_cell: Rc<RefCell<Option<RenderHook>>> = Rc::new(RefCell::new(None));
+    let render: RenderHook = {
+        let (ui, dialog, name_row, step_box, render_cell) = (
+            ui.clone(),
+            dialog.clone(),
+            name_row.clone(),
+            step_box.clone(),
+            render_cell.clone(),
+        );
+        Rc::new(move || {
+            // Show an immediate "checking" line, then read readiness off-thread.
+            while let Some(c) = step_box.first_child() {
+                step_box.remove(&c);
+            }
+            let checking = gtk::Label::new(Some("Checking Internxt\u{2026}"));
+            checking.add_css_class("dim");
+            checking.set_xalign(0.0);
+            step_box.append(&checking);
+
+            let (tx, rx) = async_channel::bounded(1);
+            std::thread::spawn(move || {
+                let _ = tx.send_blocking(esp_core::internxt::readiness());
+            });
+
+            let (ui, dialog, name_row, step_box, render_cell) = (
+                ui.clone(),
+                dialog.clone(),
+                name_row.clone(),
+                step_box.clone(),
+                render_cell.clone(),
+            );
+            glib::spawn_future_local(async move {
+                let Ok(readiness) = rx.recv().await else {
+                    return;
+                };
+                while let Some(c) = step_box.first_child() {
+                    step_box.remove(&c);
+                }
+                let again = render_cell.borrow().clone();
+                internxt_step(&ui, &dialog, &name_row, &step_box, readiness, again);
+            });
+        })
+    };
+    *render_cell.borrow_mut() = Some(render.clone());
+    render();
+
+    let header = adw::HeaderBar::new();
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_vexpand(true);
+    scroll.set_child(Some(&prefs));
+    let tv = adw::ToolbarView::new();
+    tv.add_top_bar(&header);
+    tv.set_content(Some(&scroll));
+    adw::NavigationPage::builder()
+        .title("Internxt")
+        .child(&tv)
+        .build()
+}
+
+/// Populate the Internxt wizard's step area for the current `readiness`. `again` re-renders the
+/// step after an action succeeds, advancing the wizard.
+fn internxt_step(
+    ui: &Rc<Ui>,
+    dialog: &adw::Dialog,
+    name_row: &adw::EntryRow,
+    step_box: &gtk::Box,
+    readiness: esp_core::internxt::Readiness,
+    again: Option<RenderHook>,
+) {
+    use esp_core::internxt::Readiness;
+
+    // A labelled note + optional primary button, the shape every step uses.
+    let note = |text: &str| {
+        let l = gtk::Label::new(Some(text));
+        l.add_css_class("dim");
+        l.set_xalign(0.0);
+        l.set_wrap(true);
+        l
+    };
+
+    match readiness {
+        Readiness::NeedsCli { node: false } => {
+            step_box.append(&note(
+                "Connecting Internxt needs Node.js (it runs Internxt's small command-line helper). \
+                 Install Node.js from nodejs.org, then reopen this and Oortery will set the rest up \
+                 for you.",
+            ));
+        }
+        Readiness::NeedsCli { node: true } => {
+            step_box.append(&note(
+                "Oortery will install Internxt's small helper (about 180 MB, one time). Only this \
+                 step needs it; the rest is automatic.",
+            ));
+            let btn = gtk::Button::with_label("Install Internxt support");
+            btn.add_css_class("suggested-action");
+            btn.add_css_class("pill");
+            let (ui, again) = (ui.clone(), again.clone());
+            btn.connect_clicked(move |b| {
+                b.set_sensitive(false);
+                b.set_label("Installing\u{2026}");
+                ui.toast("Installing Internxt support\u{2026}");
+                let (tx, rx) = async_channel::bounded(1);
+                std::thread::spawn(move || {
+                    let _ = tx.send_blocking(
+                        esp_core::internxt::install_cli().map_err(|e| e.to_string()),
+                    );
+                });
+                let (ui2, b2, again2) = (ui.clone(), b.clone(), again.clone());
+                glib::spawn_future_local(async move {
+                    match rx.recv().await {
+                        Ok(Ok(())) => {
+                            ui2.toast("Internxt support installed");
+                            if let Some(r) = &again2 {
+                                r();
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            b2.set_sensitive(true);
+                            b2.set_label("Install Internxt support");
+                            ui2.error(&format!("Could not install Internxt support: {e}"));
+                        }
+                        Err(_) => {}
+                    }
+                });
+            });
+            step_box.append(&btn);
+        }
+        Readiness::NeedsLogin => {
+            step_box.append(&note(
+                "Sign in to Internxt in your browser. Oortery never sees your password; Internxt \
+                 hands back only a session on your own machine.",
+            ));
+            let btn = gtk::Button::with_label("Sign in to Internxt");
+            btn.add_css_class("suggested-action");
+            btn.add_css_class("pill");
+            let (ui, again) = (ui.clone(), again.clone());
+            btn.connect_clicked(move |b| {
+                b.set_sensitive(false);
+                b.set_label("Waiting for sign-in\u{2026}");
+                ui.toast("Opening your browser to sign in to Internxt\u{2026}");
+                let (tx, rx) = async_channel::bounded(1);
+                std::thread::spawn(move || {
+                    let _ =
+                        tx.send_blocking(esp_core::internxt::login().map_err(|e| e.to_string()));
+                });
+                let (ui2, b2, again2) = (ui.clone(), b.clone(), again.clone());
+                glib::spawn_future_local(async move {
+                    match rx.recv().await {
+                        Ok(Ok(())) => {
+                            ui2.toast("Signed in to Internxt");
+                            if let Some(r) = &again2 {
+                                r();
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            b2.set_sensitive(true);
+                            b2.set_label("Sign in to Internxt");
+                            ui2.error(&format!("Sign-in did not finish: {e}"));
+                        }
+                        Err(_) => {}
+                    }
+                });
+            });
+            step_box.append(&btn);
+        }
+        Readiness::Ready => {
+            step_box.append(&note(
+                "Signed in. Oortery will start your private Internxt bridge and connect it.",
+            ));
+            let btn = gtk::Button::with_label("Connect Internxt");
+            btn.add_css_class("suggested-action");
+            btn.add_css_class("pill");
+            let (ui, dialog, name_row) = (ui.clone(), dialog.clone(), name_row.clone());
+            btn.connect_clicked(move |b| {
+                let name = name_row.text().trim().to_string();
+                if name.is_empty() {
+                    ui.toast("Give this remote a name first.");
+                    return;
+                }
+                b.set_sensitive(false);
+                b.set_label("Connecting\u{2026}");
+                ui.toast("Starting your Internxt bridge\u{2026}");
+                let (tx, rx) = async_channel::bounded(1);
+                let n = name.clone();
+                std::thread::spawn(move || {
+                    let _ = tx
+                        .send_blocking(esp_core::internxt::connect(&n).map_err(|e| e.to_string()));
+                });
+                let (ui2, dlg2, b2) = (ui.clone(), dialog.clone(), b.clone());
+                glib::spawn_future_local(async move {
+                    match rx.recv().await {
+                        Ok(Ok(())) => {
+                            dlg2.close();
+                            crate::refresh_all(&ui2);
+                            ui2.toast(&format!("Connected to Internxt as {name}"));
+                        }
+                        Ok(Err(e)) => {
+                            b2.set_sensitive(true);
+                            b2.set_label("Connect Internxt");
+                            ui2.error(&format!("Could not connect Internxt: {e}"));
+                        }
+                        Err(_) => {}
+                    }
+                });
+            });
+            step_box.append(&btn);
+        }
+    }
+}
+
 fn config_page(
     ui: &Rc<Ui>,
     provider: &esp_core::Provider,
     dialog: &adw::Dialog,
 ) -> adw::NavigationPage {
+    // Internxt's native login is dead (they moved to browser auth), so route it to a guided helper
+    // that connects through Internxt's own CLI WebDAV bridge instead of the 401-guaranteed form.
+    if provider.name == "internxt" {
+        return internxt_page(ui, dialog);
+    }
     let prefs = adw::PreferencesPage::new();
     let pretty = first_line(&provider.description).to_string();
 
