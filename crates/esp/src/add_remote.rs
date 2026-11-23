@@ -8,16 +8,17 @@ use gtk::glib;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// The top providers shown under "Popular", by real-world popularity: the three big consumer clouds,
-/// a cheap object store, and a privacy-first cloud. A key is matched to an easy preset first (B2),
-/// else to the rclone provider of the same name (which decides OAuth vs form). Easy to re-order.
-const POPULAR: &[&str] = &["drive", "dropbox", "onedrive", "b2", "pcloud"];
+/// The top providers shown under "Popular", by real-world popularity: four big consumer clouds, a
+/// cheap object store, and a privacy-first cloud. Six keeps the 2-column grid square (3 even rows).
+/// A key is matched to an easy preset first (B2), else to the rclone provider of the same name
+/// (which decides OAuth vs form). Easy to re-order.
+const POPULAR: &[&str] = &["drive", "dropbox", "onedrive", "box", "b2", "pcloud"];
 
 pub fn present(ui: &Rc<Ui>) {
     let dialog = adw::Dialog::builder()
         .title("Add a remote")
         .content_width(560)
-        .content_height(640)
+        .content_height(700)
         .build();
     let nav = adw::NavigationView::new();
     nav.add(&picker_page(ui, &nav, &dialog));
@@ -49,13 +50,13 @@ type RenderHook = Rc<dyn Fn()>;
 /// one-line description of what connecting it involves. Warmer and more inviting for a newcomer
 /// than a dense list row.
 fn provider_card(icon: &str, title: &str, desc: &str) -> gtk::Button {
-    let col = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    col.set_margin_top(14);
-    col.set_margin_bottom(14);
-    col.set_margin_start(14);
-    col.set_margin_end(14);
+    let col = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    col.set_margin_top(10);
+    col.set_margin_bottom(10);
+    col.set_margin_start(12);
+    col.set_margin_end(12);
     let img = gtk::Image::from_icon_name(icon);
-    img.set_pixel_size(30);
+    img.set_pixel_size(22);
     img.set_halign(gtk::Align::Start);
     let name = gtk::Label::new(Some(title));
     name.add_css_class("title-4");
@@ -73,6 +74,36 @@ fn provider_card(icon: &str, title: &str, desc: &str) -> gtk::Button {
     btn.add_css_class("card");
     btn.set_hexpand(true);
     btn
+}
+
+/// A slim, self-animating progress bar for a long step with no measurable percentage, such as the
+/// one-time Internxt helper install (an npm fetch, no reliable %) or the browser sign-in round-trip.
+/// It pulses on a timer so the step clearly reads as working, not frozen. Returns the bar and a
+/// `stop` closure; call `stop()` once the step finishes to end the pulse (it also removes the bar
+/// from its parent). Call it exactly once.
+fn pulsing_bar() -> (gtk::ProgressBar, impl Fn()) {
+    let bar = gtk::ProgressBar::new();
+    bar.set_pulse_step(0.08);
+    bar.set_margin_top(4);
+    bar.add_css_class("osd");
+    let bar_tick = bar.clone();
+    let source = glib::timeout_add_local(std::time::Duration::from_millis(110), move || {
+        bar_tick.pulse();
+        glib::ControlFlow::Continue
+    });
+    let bar_stop = bar.clone();
+    let source = std::cell::Cell::new(Some(source));
+    let stop = move || {
+        if let Some(id) = source.take() {
+            id.remove();
+        }
+        if let Some(parent) = bar_stop.parent() {
+            if let Some(b) = parent.downcast_ref::<gtk::Box>() {
+                b.remove(&bar_stop);
+            }
+        }
+    };
+    (bar, stop)
 }
 
 /// A plain-language note for backends with a known gotcha, shown above the form so a new user is
@@ -583,11 +614,13 @@ fn internxt_step(
             let btn = gtk::Button::with_label("Install Internxt support");
             btn.add_css_class("suggested-action");
             btn.add_css_class("pill");
-            let (ui, again) = (ui.clone(), again.clone());
+            let (ui, again, step_box_c) = (ui.clone(), again.clone(), step_box.clone());
             btn.connect_clicked(move |b| {
                 b.set_sensitive(false);
                 b.set_label("Installing\u{2026}");
                 ui.toast("Installing Internxt support\u{2026}");
+                let (bar, stop) = pulsing_bar();
+                step_box_c.append(&bar);
                 let (tx, rx) = async_channel::bounded(1);
                 std::thread::spawn(move || {
                     let _ = tx.send_blocking(
@@ -596,7 +629,9 @@ fn internxt_step(
                 });
                 let (ui2, b2, again2) = (ui.clone(), b.clone(), again.clone());
                 glib::spawn_future_local(async move {
-                    match rx.recv().await {
+                    let result = rx.recv().await;
+                    stop();
+                    match result {
                         Ok(Ok(())) => {
                             ui2.toast("Internxt support installed");
                             if let Some(r) = &again2 {
@@ -622,19 +657,38 @@ fn internxt_step(
             let btn = gtk::Button::with_label("Sign in to Internxt");
             btn.add_css_class("suggested-action");
             btn.add_css_class("pill");
-            let (ui, again) = (ui.clone(), again.clone());
+            let (ui, again, step_box_c) = (ui.clone(), again.clone(), step_box.clone());
             btn.connect_clicked(move |b| {
                 b.set_sensitive(false);
                 b.set_label("Waiting for sign-in\u{2026}");
                 ui.toast("Opening your browser to sign in to Internxt\u{2026}");
+                let (bar, stop) = pulsing_bar();
+                step_box_c.append(&bar);
                 let (tx, rx) = async_channel::bounded(1);
+                let (url_tx, url_rx) = async_channel::bounded(1);
                 std::thread::spawn(move || {
-                    let _ =
-                        tx.send_blocking(esp_core::internxt::login().map_err(|e| e.to_string()));
+                    let r = esp_core::internxt::login(|u| {
+                        let _ = url_tx.send_blocking(u.to_string());
+                    })
+                    .map_err(|e| e.to_string());
+                    let _ = tx.send_blocking(r);
+                });
+                // Open the sign-in URL through the desktop's own launcher the moment the CLI hands it
+                // over. The CLI tries to open a browser itself, but that can fail silently in a
+                // sandboxed/AppImage session, so we do it reliably here instead.
+                glib::spawn_future_local(async move {
+                    if let Ok(url) = url_rx.recv().await {
+                        let _ = gtk::gio::AppInfo::launch_default_for_uri(
+                            &url,
+                            None::<&gtk::gio::AppLaunchContext>,
+                        );
+                    }
                 });
                 let (ui2, b2, again2) = (ui.clone(), b.clone(), again.clone());
                 glib::spawn_future_local(async move {
-                    match rx.recv().await {
+                    let result = rx.recv().await;
+                    stop();
+                    match result {
                         Ok(Ok(())) => {
                             ui2.toast("Signed in to Internxt");
                             if let Some(r) = &again2 {

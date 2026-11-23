@@ -13,7 +13,8 @@
 
 use crate::{create_remote, verify_remote, which};
 use anyhow::{bail, Context, Result};
-use std::process::Command;
+use std::io::{BufRead, BufReader, Read};
+use std::process::{Command, Stdio};
 
 /// The loopback port the Internxt WebDAV bridge listens on. Fixed so a remote created against it
 /// keeps resolving across sessions.
@@ -96,19 +97,69 @@ pub fn bridge_online() -> bool {
         .unwrap_or(false)
 }
 
-/// Start the browser sign-in (`internxt login`). This opens the user's browser and blocks until
-/// they finish, exactly like the OAuth clouds, so run it off the UI thread. Succeeds only once an
-/// account is actually signed in.
-pub fn login() -> Result<()> {
+/// Start the browser sign-in. The CLI prints a login URL, opens the browser, and runs a local
+/// callback server, blocking until the browser round-trip finishes, so run this off the UI thread.
+///
+/// We do NOT rely on the CLI opening the browser: its bundled opener can fail silently in a
+/// sandboxed or AppImage environment (no inherited DISPLAY/xdg-open on PATH), which stranded the
+/// user at a button that did nothing. Instead we run `--json`, read the `loginUrl` off stdout as
+/// soon as the CLI emits it, and hand it to `on_url` so the caller opens it through the desktop's
+/// own launcher. Succeeds only once an account is really signed in; on failure we surface the CLI's
+/// stderr rather than a generic message.
+pub fn login(mut on_url: impl FnMut(&str)) -> Result<()> {
     let cli = cli_path().context("the Internxt CLI is not installed")?;
-    Command::new(&cli)
-        .arg("login")
-        .status()
+    let mut child = Command::new(&cli)
+        .args(["login", "--json"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .context("launching internxt login")?;
-    if !is_logged_in() {
-        bail!("Internxt sign-in did not complete");
+
+    // Pull the login URL off stdout the moment the CLI prints it, then open it ourselves. We keep
+    // draining the pipe to EOF rather than stopping at the URL: closing our read end early would
+    // EPIPE-kill the CLI's later stdout writes (the classic `node | head` crash), aborting the
+    // sign-in. EOF arrives when the CLI closes stdout at exit, i.e. once the browser round-trip ends.
+    if let Some(stdout) = child.stdout.take() {
+        let mut opened = false;
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if !opened {
+                if let Some(url) = parse_login_url(&line) {
+                    on_url(&url);
+                    opened = true;
+                }
+            }
+        }
     }
-    Ok(())
+
+    let status = child.wait().context("waiting for internxt login")?;
+    if is_logged_in() {
+        return Ok(());
+    }
+    // Not signed in: surface whatever the CLI complained about, so a real failure is diagnosable
+    // instead of a bare "did not complete".
+    let mut err = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let _ = stderr.read_to_string(&mut err);
+    }
+    let err = err.trim();
+    if err.is_empty() {
+        bail!(
+            "Internxt sign-in did not complete (CLI exited with {})",
+            status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "no status".into())
+        );
+    }
+    bail!("Internxt sign-in did not complete: {err}");
+}
+
+/// Pull the `loginUrl` out of a `--json` output line (`{ "loginUrl": "https://..." }`). None for any
+/// other line, so we can scan stdout until the URL appears.
+fn parse_login_url(line: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    v.get("loginUrl")?.as_str().map(str::to_string)
 }
 
 /// Configure the bridge for Oortery (plain HTTP on loopback, custom auth with `password`) and start
@@ -300,6 +351,18 @@ mod tests {
             br#"{"success": true, "message": "me@example.com"}"#
         ));
         assert!(!parse_logged_in(b"not json"));
+    }
+
+    #[test]
+    fn login_url_is_pulled_from_the_json_line() {
+        // The real shape of `internxt login --json`'s first stdout line.
+        assert_eq!(
+            parse_login_url(r#"{ "loginUrl": "https://drive.internxt.com/login?x=1" }"#).as_deref(),
+            Some("https://drive.internxt.com/login?x=1")
+        );
+        // Human log lines and later JSON without a loginUrl are skipped.
+        assert_eq!(parse_login_url("Opening browser for login..."), None);
+        assert_eq!(parse_login_url(r#"{"success": true}"#), None);
     }
 
     #[test]
