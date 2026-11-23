@@ -81,8 +81,20 @@ pub fn password_file(id: &str) -> Result<PathBuf> {
     Ok(config_dir()?.join(format!("backup-{id}.pw")))
 }
 
-/// Write a job's repo password to its 0600 file.
+/// Store a job's repo password. Prefers the OS keyring; falls back to a 0600 file only where no
+/// keyring is available (headless/minimal systems). On a successful keyring store, any stale
+/// fallback file is removed so there is one source of truth, not a lingering plaintext copy.
 pub fn save_password(id: &str, password: &str) -> Result<()> {
+    if crate::secret::keyring_set(id, password) {
+        if let Ok(p) = password_file(id) {
+            let _ = std::fs::remove_file(p);
+        }
+        return Ok(());
+    }
+    write_password_file(id, password)
+}
+
+fn write_password_file(id: &str, password: &str) -> Result<()> {
     let path = password_file(id)?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -96,12 +108,37 @@ pub fn save_password(id: &str, password: &str) -> Result<()> {
     Ok(())
 }
 
+/// The repo password for `id`: from the OS keyring, else the 0600 fallback file. If it is read from
+/// the file and a keyring is now available, it is migrated into the keyring and the plaintext file
+/// removed, so an existing on-disk password is upgraded automatically on the next backup.
+pub fn repo_password(id: &str) -> Result<String> {
+    if let Some(pw) = crate::secret::keyring_get(id) {
+        return Ok(pw);
+    }
+    let path = password_file(id)?;
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading the backup password for {id}"))?;
+    let pw = raw.trim_end_matches(['\n', '\r']).to_string();
+    if crate::secret::keyring_set(id, &pw) {
+        let _ = std::fs::remove_file(&path);
+    }
+    Ok(pw)
+}
+
+/// Forget a job's repo password from everywhere (keyring and any fallback file). On backup delete.
+pub fn delete_password(id: &str) {
+    crate::secret::keyring_delete(id);
+    if let Ok(p) = password_file(id) {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
 fn restic_cmd(job: &BackupJob) -> Result<Command> {
     let mut c = Command::new("restic");
-    c.arg("--repo")
-        .arg(job.repo.restic_repo())
-        .arg("--password-file")
-        .arg(password_file(&job.id)?);
+    c.arg("--repo").arg(job.repo.restic_repo());
+    // The password goes to restic via env, not a file or argv: with the keyring there is no
+    // plaintext file at all, and env is only readable by the same user's processes.
+    c.env("RESTIC_PASSWORD", repo_password(&job.id)?);
     // When the repo is a cloud remote, restic shells out to rclone, which honors RCLONE_*
     // env. Apply the destination backend's throttle/retry envelope so a cloud backup is as
     // gentle as a sync to the same backend (the Proton many-small-files hang bites restic too;

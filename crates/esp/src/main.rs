@@ -90,7 +90,7 @@ impl Ui {
     /// not miss it, unlike a toast that fades). Also logged. Use for failures the user must know
     /// about to proceed (the engine would not start, a mount failed), not for light validation.
     pub fn fail(&self, title: &str, msg: &str) {
-        esp_core::diag::error(&format!("{title}: {msg}"));
+        esp_core::diag::error(format!("{title}: {msg}"));
         let dialog = adw::AlertDialog::new(Some(title), Some(msg));
         dialog.add_response("ok", "OK");
         dialog.set_default_response(Some("ok"));

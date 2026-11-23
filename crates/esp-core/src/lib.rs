@@ -26,6 +26,7 @@ pub mod preflight;
 pub mod presets;
 pub mod roots;
 pub mod runlog;
+pub mod secret;
 pub mod settings;
 pub mod sovereignty;
 pub mod stall;
@@ -33,8 +34,9 @@ pub mod tuning;
 
 pub use autostart::{autostart_enabled, set_autostart};
 pub use backups::{
-    check_repo, init_repo, list_snapshots, load_backups, password_file, restic_path, restore,
-    run_backup, save_backups, save_password, unlock_repo, BackupJob, BackupPhase, Snapshot,
+    check_repo, delete_password, init_repo, list_snapshots, load_backups, password_file,
+    repo_password, restic_path, restore, run_backup, save_backups, save_password, unlock_repo,
+    BackupJob, BackupPhase, Snapshot,
 };
 pub use dashboard::{ago, summary, Health, Summary};
 pub use engine::{

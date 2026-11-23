@@ -177,9 +177,7 @@ fn job_row(ui: &Rc<Ui>, job: BackupJob) -> adw::ActionRow {
                     let mut jobs = esp_core::load_backups().unwrap_or_default();
                     jobs.retain(|j| j.id != id2);
                     let _ = esp_core::save_backups(&jobs);
-                    if let Ok(pw) = esp_core::password_file(&id2) {
-                        let _ = std::fs::remove_file(pw);
-                    }
+                    esp_core::delete_password(&id2);
                     refresh(&ui2);
                 }
             });
@@ -580,7 +578,7 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
         // new repo) an explicit acknowledgement that it has been saved. On edit, a blank password
         // keeps the existing one, so these only apply when a password is actually set.
         if !password.is_empty() {
-            if pw_confirm.text().to_string() != password {
+            if pw_confirm.text().as_str() != password {
                 ui2.toast("The two passwords do not match.");
                 return;
             }
