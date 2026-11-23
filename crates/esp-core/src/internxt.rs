@@ -199,6 +199,10 @@ pub fn install_cli() -> Result<()> {
     }
     let dir = crate::jobs::config_dir()?.join("internxt-cli");
     std::fs::create_dir_all(&dir)?;
+    // We execute this binary (and re-execute it every launch via ensure_bridge), so lock the
+    // install dir to the user (0700): another local user must not be able to drop a trojan binary
+    // where we look. See the security delta review.
+    restrict_dir(&dir);
     let prefix = dir.to_str().context("config path is not valid UTF-8")?;
     run_ok(
         Command::new("npm").args([
@@ -207,6 +211,9 @@ pub fn install_cli() -> Result<()> {
             prefix,
             "--no-audit",
             "--no-fund",
+            // Block npm lifecycle scripts: a compromised transitive dep cannot run arbitrary code
+            // as the user at install time (which would then persist via the launch auto-restart).
+            "--ignore-scripts",
             "--loglevel=error",
             &format!("@internxt/cli@{CLI_VERSION}"),
         ]),
@@ -217,6 +224,16 @@ pub fn install_cli() -> Result<()> {
     }
     Ok(())
 }
+
+/// Lock a directory to the owner (0700) on Unix, best-effort. Used for the managed CLI install dir,
+/// whose contents we execute. A no-op on platforms without Unix permissions.
+#[cfg(unix)]
+fn restrict_dir(dir: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+}
+#[cfg(not(unix))]
+fn restrict_dir(_dir: &std::path::Path) {}
 
 /// A random bridge password, so the local WebDAV server is never left on a guessable credential.
 fn random_password() -> Result<String> {

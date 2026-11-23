@@ -183,13 +183,22 @@ fn picker_page(
     all_label.add_css_class("heading");
     all_label.set_margin_top(6);
 
+    // Popular is collapsible so a user who wants the full A-Z list can fold it away and give the
+    // scrolling list the whole pane. Open by default (most people take a popular one).
+    let popular_exp = gtk::Expander::new(None);
+    popular_exp.set_label_widget(Some(&popular));
+    popular_exp.set_expanded(true);
+    let popular_body = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    popular_body.set_margin_top(8);
+    popular_body.append(&presets_list);
+    popular_exp.set_child(Some(&popular_body));
+
     let body = gtk::Box::new(gtk::Orientation::Vertical, 10);
     body.set_margin_top(12);
     body.set_margin_bottom(12);
     body.set_margin_start(12);
     body.set_margin_end(12);
-    body.append(&popular);
-    body.append(&presets_list);
+    body.append(&popular_exp);
     body.append(&all_label);
     body.append(&search);
     body.append(&scroll);
@@ -319,7 +328,7 @@ fn preset_page(
                 Ok(Err(e)) => {
                     btn_c.set_sensitive(true);
                     btn_c.set_label("Create");
-                    ui_c.error(&format!("Could not add: {e}"));
+                    ui_c.error(&format!("Could not add: {}", esp_core::friendly_error(&e)));
                 }
                 Err(_) => {
                     btn_c.set_sensitive(true);
@@ -457,10 +466,31 @@ fn internxt_step(
     match readiness {
         Readiness::NeedsCli { node: false } => {
             step_box.append(&note(
-                "Connecting Internxt needs Node.js (it runs Internxt's small command-line helper). \
-                 Install Node.js from nodejs.org, then reopen this and Oortery will set the rest up \
-                 for you.",
+                "Connecting Internxt needs Node.js, a small free runtime for its helper. Install it, \
+                 then press Check again and Oortery handles the rest. (Most Oortery builds include \
+                 this already, so you should rarely see this screen.)",
             ));
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            let get = gtk::Button::with_label("Get Node.js");
+            get.add_css_class("pill");
+            get.connect_clicked(|_| {
+                let _ = gtk::gio::AppInfo::launch_default_for_uri(
+                    "https://nodejs.org/en/download",
+                    None::<&gtk::gio::AppLaunchContext>,
+                );
+            });
+            let recheck = gtk::Button::with_label("Check again");
+            recheck.add_css_class("suggested-action");
+            recheck.add_css_class("pill");
+            let again_r = again.clone();
+            recheck.connect_clicked(move |_| {
+                if let Some(r) = &again_r {
+                    r();
+                }
+            });
+            row.append(&get);
+            row.append(&recheck);
+            step_box.append(&row);
         }
         Readiness::NeedsCli { node: true } => {
             step_box.append(&note(
@@ -979,7 +1009,7 @@ fn config_value_page(
                 Ok(Err(e)) => {
                     btn_c.set_sensitive(true);
                     btn_c.set_label("Create");
-                    ui_c.error(&format!("Could not add: {e}"));
+                    ui_c.error(&format!("Could not add: {}", esp_core::friendly_error(&e)));
                 }
                 Err(_) => {
                     btn_c.set_sensitive(true);

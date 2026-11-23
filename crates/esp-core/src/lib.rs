@@ -358,12 +358,25 @@ pub fn verify_remote(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Make a raw rclone/backend error human-friendly for display. Public wrapper so the add-remote
+/// flow can map a failed `create_remote` (e.g. Proton's CAPTCHA block) the same way verify does.
+/// Idempotent in practice: an already-friendly string matches no pattern and passes through.
+pub fn friendly_error(raw: &str) -> String {
+    friendly_connect_error(raw)
+}
+
 /// Turn rclone's raw stderr into a short, actionable message for the common object-store failures,
 /// so a new user knows what to fix instead of reading an SDK stack trace. Falls back to the trimmed
 /// raw text for anything we do not recognise. (Error-code matching, borrowed from Arcalox's probe.)
 fn friendly_connect_error(stderr: &str) -> String {
     let s = stderr.to_lowercase();
-    if s.contains("accessdenied")
+    if s.contains("captcha") || s.contains("code=9001") || s.contains("code=2028") {
+        // Proton (and similar anti-bot backends) temporarily block sign-in after repeated tries.
+        "Proton has temporarily paused sign-ins from this app for security (a CAPTCHA check). \
+         Wait a few minutes, sign in once at proton.me or the Proton Drive app to clear the check, \
+         then try again. Repeated quick retries make this worse, so give it a short rest first."
+            .to_string()
+    } else if s.contains("accessdenied")
         || s.contains("signaturedoesnotmatch")
         || s.contains("invalidaccesskeyid")
         || s.contains("403")
@@ -413,6 +426,15 @@ mod tests {
         assert!(friendly_connect_error("dial tcp: i/o timeout").contains("Could not reach"));
         // Unknown errors fall back to the trimmed raw text.
         assert_eq!(friendly_connect_error("  weird thing  "), "weird thing");
+        // Proton's anti-bot CAPTCHA block (Code 9001 / 2028) gets a wait-and-retry explanation.
+        assert!(
+            friendly_connect_error("422 ... please complete CAPTCHA (Code=9001, Status=422)")
+                .to_lowercase()
+                .contains("proton")
+        );
+        assert!(friendly_error("Code=2028 security block")
+            .to_lowercase()
+            .contains("wait"));
     }
 
     #[test]
