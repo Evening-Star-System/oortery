@@ -505,11 +505,20 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
     let gpw = adw::PreferencesGroup::builder()
         .title("Password")
         .description(
-            "Encrypts the repository. Keep it safe: without it the backups cannot be read.",
+            "Encrypts the repository. There is no reset and no recovery: if this password is lost \
+             or mistyped, the backups can never be read again. Type it twice, and save it in a \
+             password manager now.",
         )
         .build();
     let pw_row = adw::PasswordEntryRow::builder().title("Password").build();
+    let pw_confirm = adw::PasswordEntryRow::builder()
+        .title("Confirm password")
+        .build();
+    let pw_ack = gtk::CheckButton::with_label("I have saved this password somewhere safe");
+    pw_ack.set_margin_top(6);
     gpw.add(&pw_row);
+    gpw.add(&pw_confirm);
+    gpw.add(&pw_ack);
     prefs.add(&gpw);
 
     // When: back up on its own, on a schedule (while Oortery is open), optionally at a chosen time.
@@ -561,6 +570,19 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
         if password.is_empty() && edit_id.is_none() {
             ui2.toast("Set a password to encrypt the repository.");
             return;
+        }
+        // A mistyped encryption password is unrecoverable, so require it entered twice, and (for a
+        // new repo) an explicit acknowledgement that it has been saved. On edit, a blank password
+        // keeps the existing one, so these only apply when a password is actually set.
+        if !password.is_empty() {
+            if pw_confirm.text().to_string() != password {
+                ui2.toast("The two passwords do not match.");
+                return;
+            }
+            if edit_id.is_none() && !pw_ack.is_active() {
+                ui2.toast("Please confirm you have saved the password; it cannot be recovered.");
+                return;
+            }
         }
         let repo = syncs::endpoint_from(&options, repo_combo.selected(), &repo_path.text());
         if repo.remote.is_none() && repo.path.is_empty() {
