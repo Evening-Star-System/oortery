@@ -262,9 +262,11 @@ fn remove_now(ui: &Rc<Ui>, name: &str) {
 }
 
 fn finish_remove(ui: &Rc<Ui>, name: &str) {
-    // A removed remote's mount is gone, so drop its sidebar bookmark and keep-mounted record too.
+    // A removed remote's mount is gone, so drop its sidebar bookmark, keep-mounted record, and
+    // landing root too.
     esp_core::desktop::remove_place(&point_for(name));
     let _ = esp_core::mountkeep::forget(name);
+    let _ = esp_core::roots::forget(name);
     match esp_core::delete_remote(name) {
         Ok(()) => {
             crate::refresh_all(ui);

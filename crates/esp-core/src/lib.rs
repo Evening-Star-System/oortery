@@ -24,6 +24,7 @@ pub mod p2p;
 pub mod portable;
 pub mod preflight;
 pub mod presets;
+pub mod roots;
 pub mod runlog;
 pub mod settings;
 pub mod sovereignty;
@@ -336,10 +337,24 @@ pub fn update_remote(name: &str, params: &[(String, String)]) -> Result<()> {
 /// its mnemonic), so the caller can discard a remote that got written to config but is not usable.
 /// Retries are forced to one so a broken remote fails fast instead of hanging.
 pub fn verify_remote(name: &str) -> Result<()> {
+    verify_remote_path(name, "")
+}
+
+/// Verify a remote by listing a specific `subpath` under it (empty = the remote root). Object-store
+/// keys are typically scoped to one bucket and cannot list the account root, so a bucket-backed
+/// preset must verify against `remote:bucket`, not `remote:` (listing all buckets), or a correctly
+/// made scoped key looks broken. The target is `name:subpath`.
+pub fn verify_remote_path(name: &str, subpath: &str) -> Result<()> {
+    let subpath = subpath.trim().trim_matches('/');
+    let target = if subpath.is_empty() {
+        format!("{name}:")
+    } else {
+        format!("{name}:{subpath}")
+    };
     let out = Command::new("rclone")
         .args([
             "lsd",
-            &format!("{name}:"),
+            &target,
             "--max-depth",
             "1",
             "--retries",

@@ -39,6 +39,15 @@ const SECRET_KEY: PresetField = PresetField {
     secret: true,
     required: true,
 };
+/// The one bucket this connection targets. Required because the keys we tell users to create are
+/// scoped to a single bucket: such a key cannot list the account's buckets, so Oortery must know
+/// which bucket to point at (both to verify the connection and to land browsing/syncs there).
+const BUCKET: PresetField = PresetField {
+    key: "bucket",
+    label: "Bucket name",
+    secret: false,
+    required: true,
+};
 
 /// The presets shown at the top of the add-remote picker, in order.
 pub const PRESETS: &[Preset] = &[
@@ -62,6 +71,7 @@ pub const PRESETS: &[Preset] = &[
                 secret: false,
                 required: true,
             },
+            BUCKET,
             ACCESS_KEY,
             SECRET_KEY,
         ],
@@ -79,6 +89,7 @@ pub const PRESETS: &[Preset] = &[
             "Copy its Access Key ID and Secret Access Key below. The secret is shown only once.",
         ],
         fields: &[
+            BUCKET,
             ACCESS_KEY,
             SECRET_KEY,
             PresetField {
@@ -109,6 +120,7 @@ pub const PRESETS: &[Preset] = &[
                 secret: false,
                 required: true,
             },
+            BUCKET,
             ACCESS_KEY,
             SECRET_KEY,
             PresetField {
@@ -144,6 +156,7 @@ pub const PRESETS: &[Preset] = &[
                 secret: true,
                 required: true,
             },
+            BUCKET,
         ],
     },
 ];
@@ -153,14 +166,18 @@ pub fn preset(id: &str) -> Option<&'static Preset> {
     PRESETS.iter().find(|p| p.id == id)
 }
 
-/// Assemble the rclone backend id and config params for a preset from the user's field values.
-/// Returns `None` for an unknown preset id. Empty optional fields are dropped so rclone uses its
-/// default (e.g. no region).
-pub fn build(
-    id: &str,
-    values: &BTreeMap<String, String>,
-) -> Option<(String, Vec<(String, String)>)> {
+/// What `build` produces: the rclone backend id, its config params, and the target bucket (may be
+/// empty for a preset without one).
+pub type PresetBuild = (String, Vec<(String, String)>, String);
+
+/// Assemble the rclone backend id, config params, and target bucket for a preset from the user's
+/// field values. Returns `None` for an unknown preset id. Empty optional fields are dropped so
+/// rclone uses its default (e.g. no region). The bucket is returned separately (not a config key):
+/// object stores address a bucket by path, so Oortery stores it as the remote's landing root and
+/// verifies against it. The bucket string is trimmed and may be empty for presets without one.
+pub fn build(id: &str, values: &BTreeMap<String, String>) -> Option<PresetBuild> {
     let get = |k: &str| values.get(k).cloned().unwrap_or_default();
+    let bucket = get("bucket").trim().to_string();
     let mut out: Vec<(String, String)> = Vec::new();
     let mut push = |k: &str, v: String| {
         if !v.is_empty() {
@@ -204,7 +221,7 @@ pub fn build(
         }
         _ => return None,
     };
-    Some((backend.to_string(), out))
+    Some((backend.to_string(), out, bucket))
 }
 
 #[cfg(test)]
@@ -215,9 +232,10 @@ mod tests {
     fn r2_builds_the_endpoint_from_account_id() {
         let mut v = BTreeMap::new();
         v.insert("account_id".to_string(), "abc123".to_string());
+        v.insert("bucket".to_string(), "  my-bucket  ".to_string());
         v.insert("access_key_id".to_string(), "AK".to_string());
         v.insert("secret_access_key".to_string(), "SK".to_string());
-        let (backend, params) = build("r2", &v).unwrap();
+        let (backend, params, bucket) = build("r2", &v).unwrap();
         assert_eq!(backend, "s3");
         assert!(params.contains(&("provider".into(), "Cloudflare".into())));
         assert!(params.contains(&(
@@ -226,6 +244,9 @@ mod tests {
         )));
         assert!(params.contains(&("region".into(), "auto".into())));
         assert!(params.contains(&("access_key_id".into(), "AK".into())));
+        // The bucket comes back trimmed and separate, never as a config param.
+        assert_eq!(bucket, "my-bucket");
+        assert!(params.iter().all(|(k, _)| k != "bucket"));
     }
 
     #[test]
@@ -235,7 +256,7 @@ mod tests {
         v.insert("access_key_id".to_string(), "AK".to_string());
         v.insert("secret_access_key".to_string(), "SK".to_string());
         // region left out
-        let (_backend, params) = build("s3compat", &v).unwrap();
+        let (_backend, params, _bucket) = build("s3compat", &v).unwrap();
         assert!(params.iter().all(|(k, _)| k != "region"));
         assert!(params.contains(&("endpoint".into(), "https://minio.example".into())));
     }

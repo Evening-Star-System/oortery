@@ -301,20 +301,27 @@ fn preset_page(
         for (k, _, _, e) in &fields {
             values.insert(k.clone(), e.text().to_string());
         }
-        let Some((backend, params)) = esp_core::presets::build(preset_id, &values) else {
+        let Some((backend, params, bucket)) = esp_core::presets::build(preset_id, &values) else {
             return;
         };
 
         btn.set_sensitive(false);
         btn.set_label("Connecting...");
         let (tx, rx) = async_channel::bounded(1);
-        let n = name.clone();
+        let (n, bk) = (name.clone(), bucket.clone());
         std::thread::spawn(move || {
-            let res = esp_core::create_remote(&n, &backend, &params).and_then(|()| {
-                esp_core::verify_remote(&n).inspect_err(|_| {
-                    let _ = esp_core::delete_remote(&n); // never keep a remote that does not work
+            // Verify against the connected bucket, not the account root: the scoped key we ask users
+            // to make cannot list all buckets, so verifying `remote:` would fail a correct key and
+            // then delete it. On success, remember the bucket as the remote's landing root.
+            let res = esp_core::create_remote(&n, &backend, &params)
+                .and_then(|()| {
+                    esp_core::verify_remote_path(&n, &bk).inspect_err(|_| {
+                        let _ = esp_core::delete_remote(&n); // never keep a remote that does not work
+                    })
                 })
-            });
+                .map(|()| {
+                    let _ = esp_core::roots::set(&n, &bk);
+                });
             let _ = tx.send_blocking(res.map_err(|e| e.to_string()));
         });
         let (ui_c, dlg_c, name_c, btn_c) = (ui2.clone(), dlg2.clone(), name.clone(), btn.clone());

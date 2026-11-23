@@ -644,6 +644,13 @@ pub(crate) fn wire_browse(
             } else {
                 cur.trim_start_matches('/').to_string()
             }
+        } else if cur.is_empty() {
+            // Land in the remote's bucket (its stored root) instead of the account root, which a
+            // bucket-scoped key cannot list.
+            remote
+                .as_deref()
+                .and_then(esp_core::roots::get)
+                .unwrap_or_default()
         } else {
             cur
         };
