@@ -218,7 +218,7 @@ fn run_job(
     let rcd = match ui.ensure_rcd() {
         Ok(r) => r,
         Err(e) => {
-            ui.toast(&format!("Could not start the engine: {e}"));
+            ui.fail("Could not start the engine", &format!("{e}"));
             return;
         }
     };

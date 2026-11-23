@@ -69,9 +69,10 @@ pub fn refresh(ui: &Rc<Ui>) {
     crate::update_overview(ui);
     if esp_core::restic_path().is_none() {
         let row = adw::ActionRow::builder()
-            .title("restic is not installed")
+            .title("Backups are not available in this build")
             .subtitle(
-                "Backups need the restic tool on your system. Install it, then restart Oortery.",
+                "The backup engine is missing. Reinstall Oortery from a full build; if it keeps \
+                 happening, open the menu and copy Diagnostics so we can help.",
             )
             .build();
         row.add_prefix(&gtk::Image::from_icon_name("dialog-warning-symbolic"));

@@ -27,7 +27,7 @@ pub fn present(ui: &Rc<Ui>, fs: String, start: String, on_pick: Loader) {
     let port = match ui.ensure_rcd() {
         Ok(r) => r.port(),
         Err(e) => {
-            ui.toast(&format!("Could not start the engine: {e}"));
+            ui.fail("Could not start the engine", &format!("{e}"));
             return;
         }
     };
