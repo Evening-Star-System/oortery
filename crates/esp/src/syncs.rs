@@ -591,6 +591,7 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<Job>) {
                 dlg2.close();
                 refresh(&ui2);
                 ui2.toast(&format!("Saved {name}"));
+                crate::prefs::nudge_run_on_time(&ui2, schedule);
             }
             Err(e) => ui2.toast(&format!("Could not save: {e}")),
         }

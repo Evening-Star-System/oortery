@@ -25,6 +25,11 @@ pub fn build(on_unlock: Rc<dyn Fn()>) -> gtk::Widget {
     sub.set_margin_bottom(6);
 
     let entry = adw::PasswordEntryRow::builder().title("Password").build();
+    // Focus the password field as soon as the lock screen appears, so a keyboard or screen-reader
+    // user can type immediately instead of hunting for it.
+    entry.connect_map(|e| {
+        e.grab_focus();
+    });
     let list = gtk::ListBox::new();
     list.add_css_class("boxed-list");
     list.set_selection_mode(gtk::SelectionMode::None);

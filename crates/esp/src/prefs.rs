@@ -5,6 +5,42 @@ use adw::prelude::*;
 use gtk::gio;
 use std::rc::Rc;
 
+/// After a scheduled sync/backup is saved, scheduled work still only runs while Oortery is running.
+/// If start-at-login or keep-in-background is off, offer to turn both on right here, so the user's
+/// "Daily 2am" actually happens instead of silently not. A no-op for manual jobs or when both are
+/// already on.
+pub(crate) fn nudge_run_on_time(ui: &Rc<Ui>, schedule: esp_core::Schedule) {
+    if schedule == esp_core::Schedule::Manual {
+        return;
+    }
+    if esp_core::autostart_enabled() && esp_core::pref_bool(esp_core::KEEP_BACKGROUND) {
+        return;
+    }
+    let dialog = adw::AlertDialog::new(
+        Some("Run this on schedule?"),
+        Some(
+            "Scheduled syncs and backups only run while Oortery is running. To run them on time, \
+             Oortery can start with your computer and keep running quietly in the background.",
+        ),
+    );
+    dialog.add_response("later", "Not now");
+    dialog.add_response("enable", "Start with my computer");
+    dialog.set_response_appearance("enable", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("enable"));
+    let ui2 = ui.clone();
+    dialog.connect_response(None, move |_, resp| {
+        if resp == "enable" {
+            if let Err(e) = esp_core::set_autostart(true, &autostart_exec()) {
+                ui2.error(&format!("Could not enable start at login: {e}"));
+                return;
+            }
+            esp_core::set_pref_bool(esp_core::KEEP_BACKGROUND, true);
+            ui2.toast("Oortery will start with your computer and keep running to sync on time.");
+        }
+    });
+    dialog.present(Some(&ui.window));
+}
+
 /// The command an autostart entry should run: the AppImage path if we are one, else this binary,
 /// with `--background` so the login launch starts quietly (hidden when background mode is on).
 fn autostart_exec() -> String {

@@ -235,6 +235,8 @@ fn preset_page(
 
     let gname = adw::PreferencesGroup::builder().title("New remote").build();
     let name_row = adw::EntryRow::builder().title("Name").build();
+    // Pre-fill a sensible name so connecting is not gated on inventing one first; still editable.
+    name_row.set_text(preset.name);
     gname.add(&name_row);
     prefs.add(&gname);
 

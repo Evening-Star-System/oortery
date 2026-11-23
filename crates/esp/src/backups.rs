@@ -346,9 +346,13 @@ fn present_snapshots(ui: &Rc<Ui>, job: &BackupJob) {
         match res {
             Ok(Ok(snaps)) if !snaps.is_empty() => {
                 for s in snaps {
+                    // Lead with a clean date and time ("2026-11-22 14:02"), not the raw ISO string
+                    // with its "T"; the hex id becomes a secondary "restore point" caption rather
+                    // than the headline, which meant nothing to a normal user.
+                    let when = s.time.get(..16).unwrap_or(&s.time).replace('T', " at ");
                     let row = adw::ActionRow::builder()
-                        .title(s.time.get(..19).unwrap_or(&s.time))
-                        .subtitle(&s.short_id)
+                        .title(&when)
+                        .subtitle(format!("Restore point {}", s.short_id))
                         .build();
                     row.add_prefix(&gtk::Image::from_icon_name("document-open-recent-symbolic"));
                     let restore = gtk::Button::with_label("Restore");
@@ -639,6 +643,7 @@ pub fn present_new(ui: &Rc<Ui>, edit: Option<BackupJob>) {
                 ui2.toast(&format!(
                     "Saved {name}. Back it up to create the first snapshot."
                 ));
+                crate::prefs::nudge_run_on_time(&ui2, schedule);
             }
             Err(e) => ui2.toast(&format!("Could not save: {e}")),
         }
