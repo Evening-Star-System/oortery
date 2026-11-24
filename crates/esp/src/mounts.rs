@@ -29,6 +29,7 @@ pub fn page() -> (gtk::Widget, gtk::ListBox) {
     ));
     sub.add_css_class("dim");
     sub.set_xalign(0.0);
+    sub.set_wrap(true);
     sub.set_margin_bottom(8);
 
     let list = gtk::ListBox::new();
@@ -38,6 +39,9 @@ pub fn page() -> (gtk::Widget, gtk::ListBox) {
     col.append(&heading);
     col.append(&sub);
     col.append(&list);
+    // Clamp(ScrolledWindow(content)): the clamp takes the window width and SHRINKS to it (so content
+    // never clips horizontally on a narrow/scaled window), while the scroll inside handles vertical
+    // overflow. The reverse nesting let the scroll give the clamp unbounded width, pinning it at 820.
     scroll.set_child(Some(&col));
     clamp.set_child(Some(&scroll));
     (clamp.upcast(), list)

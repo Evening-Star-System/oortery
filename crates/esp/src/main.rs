@@ -54,7 +54,7 @@ pub struct Ui {
     pub last_backup_label: gtk::Label,
     pub coverage_label: gtk::Label,
     pub overview_onboarding: gtk::Box,
-    pub overview_tiles: gtk::Box,
+    pub overview_tiles: gtk::FlowBox,
     /// The operations daemon, started lazily the first time a job runs.
     pub rcd: RefCell<Option<Rc<esp_core::Rcd>>>,
     /// The P2P (Syncthing) daemon, started lazily the first time the Peers page is opened.
@@ -613,6 +613,14 @@ fn build_ui(app: &adw::Application) {
     sidebar.set_content(Some(&sidebar_scroll));
 
     let content_header = adw::HeaderBar::new();
+    // Sidebar toggle, shown only when the window is narrow enough that the sidebar collapses into an
+    // overlay (see the breakpoint below). On a wide window it stays hidden and the sidebar is pinned.
+    let sidebar_toggle = gtk::ToggleButton::builder()
+        .icon_name("sidebar-show-symbolic")
+        .tooltip_text("Show the menu")
+        .visible(false)
+        .build();
+    content_header.pack_start(&sidebar_toggle);
     let add_btn = icon_button("list-add-symbolic", "Add a remote");
     add_btn.add_css_class("suggested-action");
     content_header.pack_start(&add_btn);
@@ -672,6 +680,12 @@ fn build_ui(app: &adw::Application) {
     split.set_content(Some(&content));
     split.set_max_sidebar_width(240.0);
     split.set_min_sidebar_width(210.0);
+    // Toggle reflects and drives whether the collapsed sidebar overlay is showing.
+    split
+        .bind_property("show-sidebar", &sidebar_toggle, "active")
+        .sync_create()
+        .bidirectional()
+        .build();
 
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&split));
@@ -706,6 +720,18 @@ fn build_ui(app: &adw::Application) {
     if ws.maximized {
         window.maximize();
     }
+    // Adaptive layout: below 1100px the sidebar collapses into a slide-over overlay (toggled by the
+    // header button), so the content gets the full window width and its clamped form stops clipping on
+    // a small or scaled/HiDPI window. Above 1100px the sidebar is pinned. This is the standard
+    // libadwaita responsive pattern (what GNOME apps do when they get narrow).
+    let breakpoint = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+        adw::BreakpointConditionLengthType::MaxWidth,
+        1100.0,
+        adw::LengthUnit::Px,
+    ));
+    breakpoint.add_setter(&split, "collapsed", Some(&true.to_value()));
+    breakpoint.add_setter(&sidebar_toggle, "visible", Some(&true.to_value()));
+    window.add_breakpoint(breakpoint);
     // Remember the geometry on close. default_width/height track the unmaximized size, so a
     // maximized-then-restored session still reopens at a sensible size.
     window.connect_close_request(|w| {
@@ -938,7 +964,7 @@ struct OverviewWidgets {
     remotes: gtk::Label,
     active: gtk::Label,
     onboarding: gtk::Box,
-    tiles: gtk::Box,
+    tiles: gtk::FlowBox,
     connect_btn: gtk::Button,
     protect_btn: gtk::Button,
 }
@@ -1083,16 +1109,23 @@ fn overview_page(node_count: &Rc<Cell<usize>>) -> OverviewWidgets {
     col.append(&onboarding);
 
     // Actionable tiles: freshness, coverage, remotes, and live activity. No vanity counters.
-    let tiles = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+    // A FlowBox (not a fixed row) so the four tiles WRAP on a narrow/scaled window (4-across when
+    // wide, 2x2 or 1-up when narrow) instead of forcing a wide minimum that made every page clip.
+    let tiles = gtk::FlowBox::new();
+    tiles.set_selection_mode(gtk::SelectionMode::None);
     tiles.set_homogeneous(true);
+    tiles.set_min_children_per_line(1);
+    tiles.set_max_children_per_line(4);
+    tiles.set_column_spacing(16);
+    tiles.set_row_spacing(16);
     let (last_card, last_backup) = stat_card("never", "LAST BACKUP", true);
     let (cov_card, coverage) = stat_card("0/0", "PROTECTED", false);
     let (rem_card, remotes) = stat_card("0", "REMOTES", false);
     let (act_card, active) = stat_card("0", "RUNNING NOW", false);
-    tiles.append(&last_card);
-    tiles.append(&cov_card);
-    tiles.append(&rem_card);
-    tiles.append(&act_card);
+    tiles.insert(&last_card, -1);
+    tiles.insert(&cov_card, -1);
+    tiles.insert(&rem_card, -1);
+    tiles.insert(&act_card, -1);
     col.append(&tiles);
 
     scroll.set_child(Some(&col));
