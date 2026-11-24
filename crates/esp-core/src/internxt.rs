@@ -295,6 +295,26 @@ pub fn install_cli() -> Result<()> {
         ]),
         "installing Internxt support",
     )?;
+    // The CLI's WebDAV bridge uses better-sqlite3, a native module whose own `install` script
+    // (prebuild-install) fetches its compiled .node binary. --ignore-scripts above (which blocks every
+    // dependency's lifecycle scripts, so a compromised transitive dep cannot run code at install) also
+    // skips that fetch, so the bridge server crashed at boot with "Could not locate the bindings file"
+    // and never listened -> connect failed at "verifying the Internxt remote". We therefore rebuild
+    // JUST that one native dep (it is the only package in the tree with an install script; sharp, the
+    // only other native dep, ships prebuilt platform packages and needs none). Every other package's
+    // scripts stay blocked, so this is a narrow, named relaxation, not a blanket re-enable.
+    run_ok(
+        Command::new("npm").args([
+            "rebuild",
+            "--prefix",
+            prefix,
+            "--no-audit",
+            "--no-fund",
+            "--loglevel=error",
+            "better-sqlite3",
+        ]),
+        "building Internxt's database helper",
+    )?;
     if cli_path().is_none() {
         bail!("the Internxt CLI did not appear after install");
     }
