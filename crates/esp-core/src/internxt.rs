@@ -186,13 +186,38 @@ pub fn start_bridge(password: &str) -> Result<()> {
 
 /// Start the bridge with its already-stored config (host/port/custom-auth creds persist in the
 /// CLI's own config across runs), without reconfiguring. Used to bring it back after a reboot.
+///
+/// `webdav enable` spawns the bridge under pm2 and returns before the HTTP server is actually
+/// accepting connections, so we then wait for the port to come up. Without this, creating and
+/// verifying the rclone remote raced the bridge and failed right at "verifying the Internxt remote".
 pub fn enable_bridge() -> Result<()> {
     let cli = cli_path().context("the Internxt CLI is not installed")?;
     run_ok(
         Command::new(&cli).args(["webdav", "enable"]),
         "starting the Internxt bridge",
     )?;
+    if !wait_for_bridge_port(std::time::Duration::from_secs(25)) {
+        bail!("the Internxt bridge did not start listening on 127.0.0.1:{BRIDGE_PORT} in time");
+    }
     Ok(())
+}
+
+/// Poll the bridge's loopback port until it accepts a TCP connection (i.e. the WebDAV server is
+/// really listening), or `timeout` elapses. This is exactly the readiness rclone needs before we
+/// point a remote at the bridge, and it is protocol-agnostic (no auth or HTTP round-trip required).
+fn wait_for_bridge_port(timeout: std::time::Duration) -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    let addr = SocketAddr::from(([127, 0, 0, 1], BRIDGE_PORT));
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500)).is_ok() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
 }
 
 /// Whether any configured remote points at the local Internxt bridge, i.e. the user actually uses
