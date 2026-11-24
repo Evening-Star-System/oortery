@@ -1148,8 +1148,10 @@ fn overview_page(node_count: &Rc<Cell<usize>>) -> OverviewWidgets {
     let tiles = gtk::FlowBox::new();
     tiles.set_selection_mode(gtk::SelectionMode::None);
     tiles.set_homogeneous(true);
+    // Cap at 2 per line so four tiles form a clean 2x2 (and 1-up only when very narrow), never the
+    // ugly 3-on-top-1-left-aligned-below that max=4 produced when only three fit.
     tiles.set_min_children_per_line(1);
-    tiles.set_max_children_per_line(4);
+    tiles.set_max_children_per_line(2);
     tiles.set_column_spacing(16);
     tiles.set_row_spacing(16);
     let (last_card, last_backup) = stat_card("never", "LAST BACKUP", true);

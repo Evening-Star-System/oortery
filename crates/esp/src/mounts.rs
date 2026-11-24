@@ -183,7 +183,16 @@ fn mount(ui: &Rc<Ui>, name: &str) {
     // VFS, and doing that on the UI thread freezes the whole app.
     ui.toast(&format!("Mounting {name}\u{2026}"));
     let (tx, rx) = async_channel::bounded(1);
-    let (port, fs, point_t) = (rcd.port(), format!("{name}:"), point.clone());
+    // Mount INSIDE the remote's landing root (the bucket) when one is set. Object-store keys are
+    // scoped to a single bucket and cannot list the account root, so mounting `name:` shows an empty
+    // folder even though the bucket has files. Syncs already do this; mounts must too.
+    let root = esp_core::roots::get(name).unwrap_or_default();
+    let fs = if root.is_empty() {
+        format!("{name}:")
+    } else {
+        format!("{name}:{root}")
+    };
+    let (port, fs, point_t) = (rcd.port(), fs, point.clone());
     std::thread::spawn(move || {
         let _ = tx.send_blocking(esp_core::mount(port, &fs, &point_t).map_err(|e| e.to_string()));
     });

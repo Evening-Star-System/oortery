@@ -46,27 +46,34 @@ fn first_line(s: &str) -> &str {
 /// one-line description of what connecting it involves. Warmer and more inviting for a newcomer
 /// than a dense list row.
 fn provider_card(icon: &str, title: &str, desc: &str) -> gtk::Button {
-    let col = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    col.set_margin_top(10);
-    col.set_margin_bottom(10);
-    col.set_margin_start(12);
-    col.set_margin_end(12);
+    // Compact horizontal layout: a small icon beside a bold name over a dim one-liner. Reads like a
+    // tidy list item rather than a tall, blocky card.
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.set_margin_top(8);
+    row.set_margin_bottom(8);
+    row.set_margin_start(10);
+    row.set_margin_end(10);
     let img = gtk::Image::from_icon_name(icon);
-    img.set_pixel_size(22);
-    img.set_halign(gtk::Align::Start);
+    img.set_pixel_size(18);
+    img.set_valign(gtk::Align::Center);
+    img.add_css_class("dim");
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    text.set_valign(gtk::Align::Center);
+    text.set_hexpand(true);
     let name = gtk::Label::new(Some(title));
-    name.add_css_class("title-4");
+    name.add_css_class("heading");
     name.set_xalign(0.0);
-    name.set_wrap(true);
+    name.set_ellipsize(gtk::pango::EllipsizeMode::End);
     let sub = gtk::Label::new(Some(desc));
     sub.add_css_class("dim");
     sub.add_css_class("caption");
     sub.set_xalign(0.0);
-    sub.set_wrap(true);
-    col.append(&img);
-    col.append(&name);
-    col.append(&sub);
-    let btn = gtk::Button::builder().child(&col).build();
+    sub.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    text.append(&name);
+    text.append(&sub);
+    row.append(&img);
+    row.append(&text);
+    let btn = gtk::Button::builder().child(&row).build();
     btn.add_css_class("card");
     btn.set_hexpand(true);
     btn
