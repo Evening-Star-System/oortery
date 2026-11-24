@@ -1121,6 +1121,15 @@ fn config_value_page(
     let ui2 = ui.clone();
     let dlg2 = dialog.clone();
     let backend = provider.name.clone();
+    // The rclone fields that are passwords (IsPassword, not merely sensitive-display). rclone stores
+    // these obscured and reveals them at use time; some backends (Internxt) reveal during config
+    // create, so they must be obscured before create or the login reads garbage and 401s.
+    let pw_fields: std::collections::HashSet<String> = provider
+        .options
+        .iter()
+        .filter(|o| o.is_password)
+        .map(|o| o.name.clone())
+        .collect();
     let name_row2 = name_row.clone();
     create.connect_clicked(move |btn| {
         let name = name_row2.text().trim().to_string();
@@ -1169,14 +1178,31 @@ fn config_value_page(
 
         let (tx, rx) = async_channel::bounded(1);
         let (n, b) = (name.clone(), backend.clone());
+        let pw = pw_fields.clone();
         std::thread::spawn(move || {
-            let created = match port {
-                Some(p) => esp_core::connect::credential_connect(p, &n, &b, &params),
-                None => esp_core::create_remote(&n, &b, &params),
-            };
-            let res = created.and_then(|()| {
-                esp_core::verify_remote(&n).inspect_err(|_| {
-                    let _ = esp_core::delete_remote(&n); // never keep a remote that does not work
+            // Obscure password fields before create. rclone reveals these at use time, and Internxt
+            // reveals during config create itself, so a plaintext password is read as garbage and the
+            // backend returns a bogus "Wrong login credentials (401)". Obscuring here matches the
+            // verified-working `rclone config create ... pass $(rclone obscure PW)`.
+            let prepared: anyhow::Result<Vec<(String, String)>> = params
+                .into_iter()
+                .map(|(k, v)| {
+                    if !v.is_empty() && pw.contains(&k) {
+                        esp_core::obscure(&v).map(|o| (k, o))
+                    } else {
+                        Ok((k, v))
+                    }
+                })
+                .collect();
+            let res = prepared.and_then(|params| {
+                match port {
+                    Some(p) => esp_core::connect::credential_connect(p, &n, &b, &params),
+                    None => esp_core::create_remote(&n, &b, &params),
+                }
+                .and_then(|()| {
+                    esp_core::verify_remote(&n).inspect_err(|_| {
+                        let _ = esp_core::delete_remote(&n); // never keep a remote that does not work
+                    })
                 })
             });
             // Format the whole error chain ({:#}) so the user sees rclone's real cause (e.g.

@@ -226,6 +226,38 @@ pub fn create_remote(name: &str, backend: &str, params: &[(String, String)]) -> 
     Ok(())
 }
 
+/// Obscure a plaintext secret with `rclone obscure` (fed on stdin, never argv, so it is not visible
+/// in the process list). rclone stores password fields obscured and REVEALS them at use time; a few
+/// backends (Internxt) even log in during `config create` and reveal the password right then, so they
+/// must be handed an already-obscured value or the login sees garbage and returns a bogus "Wrong
+/// login credentials (401)". Callers pass PLAINTEXT; do not double-obscure an already-obscured value.
+pub fn obscure(plaintext: &str) -> Result<String> {
+    use std::io::Write;
+    let mut child = Command::new("rclone")
+        .args(["obscure", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("failed to run `rclone obscure`")?;
+    child
+        .stdin
+        .take()
+        .context("rclone obscure stdin")?
+        .write_all(plaintext.as_bytes())
+        .context("writing to rclone obscure")?;
+    let out = child
+        .wait_with_output()
+        .context("waiting for rclone obscure")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "rclone obscure failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
 /// Backend-specific default parameters, applied when the user did not set them. This gets ahead of
 /// known provider breakage (see the 2026-11-22 remote audit): Proton Drive's API rejects an absent
 /// or wrong `app_version`, and Linux users have no Proton desktop app to read their own value from,
