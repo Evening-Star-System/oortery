@@ -676,12 +676,29 @@ fn build_ui(app: &adw::Application) {
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&split));
 
-    // Reopen at the size the user left it (defaults are large enough to show the whole UI).
+    // Reopen at the size the user left it, but never larger than the screen. On a scaled / HiDPI
+    // display the logical work area can be well under the saved size, which would push the window
+    // bottom (and its buttons) off-screen. Clamp to the monitor geometry (logical px) so the whole
+    // UI always fits; this only ever shrinks, never a regression on a big display.
     let ws = esp_core::load_window_state();
+    let (mut win_w, mut win_h) = (ws.width, ws.height);
+    if let Some(geo) = gdk::Display::default()
+        .and_then(|d| d.monitors().item(0))
+        .and_downcast::<gdk::Monitor>()
+        .map(|m| m.geometry())
+    {
+        if geo.width() > 0 {
+            win_w = win_w.min((geo.width() - 40).max(360));
+        }
+        if geo.height() > 0 {
+            // Leave headroom for the top bar / desktop panels.
+            win_h = win_h.min((geo.height() - 96).max(480));
+        }
+    }
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .default_width(ws.width)
-        .default_height(ws.height)
+        .default_width(win_w)
+        .default_height(win_h)
         .width_request(360)
         .height_request(480)
         .content(&toasts)
@@ -869,23 +886,9 @@ fn build_ui(app: &adw::Application) {
     tray::setup(&ui);
 
     // Bring back whatever the user left mounted last time, so "stay mounted" survives restarts and
-    // logins (paired with Start-at-login in Preferences). Quiet and best-effort. The Internxt bridge
-    // is a pm2 process that does NOT survive a reboot, so re-enable it first (if the user uses
-    // Internxt and is still signed in) off the UI thread (the CLI is Node, slow to start), then
-    // remount so a persisted Internxt mount reconnects. A quick no-op for everyone else.
-    {
-        let ui_b = ui.clone();
-        let (tx, rx) = async_channel::bounded(1);
-        std::thread::spawn(move || {
-            let _ = tx.send_blocking(esp_core::internxt::ensure_bridge());
-        });
-        glib::spawn_future_local(async move {
-            if let Ok(Ok(true)) = rx.recv().await {
-                ui_b.toast("Reconnected your Internxt bridge");
-            }
-            mounts::auto_remount(&ui_b);
-        });
-    }
+    // logins (paired with Start-at-login in Preferences). Quiet and best-effort; a no-op if nothing
+    // was mounted.
+    mounts::auto_remount(&ui);
 
     // Headless aid: auto-open the add-remote dialog for screenshots.
     if aid("ESP_DIALOG").is_some() {
