@@ -424,11 +424,20 @@ pub fn friendly_error(raw: &str) -> String {
 /// raw text for anything we do not recognise. (Error-code matching, borrowed from Arcalox's probe.)
 fn friendly_connect_error(stderr: &str) -> String {
     let s = stderr.to_lowercase();
-    if s.contains("captcha") || s.contains("code=9001") || s.contains("code=2028") {
-        // Proton (and similar anti-bot backends) temporarily block sign-in after repeated tries.
-        "Proton has temporarily paused sign-ins from this app for security (a CAPTCHA check). \
-         Wait a few minutes, sign in once at proton.me or the Proton Drive app to clear the check, \
-         then try again. Repeated quick retries make this worse, so give it a short rest first."
+    if s.contains("code=2028") || (s.contains("too many") && s.contains("proton")) {
+        // Code=2028 / HTTP 429: a genuine rate limit ("too many recent login attempts"). This one
+        // is time-based, so a short rest actually clears it.
+        "Proton is rate-limiting sign-ins (too many recent attempts). Wait a few minutes, then try \
+         again. Repeated quick retries make it worse, so give it a short rest first."
+            .to_string()
+    } else if s.contains("captcha") || s.contains("code=9001") {
+        // Code=9001 / HTTP 422: Proton's CAPTCHA wall, enforced server-side against non-browser
+        // apps like rclone. Waiting does NOT clear it and neither does a browser login on its own;
+        // the usual fix is turning off Proton Sentinel. (Verified: rclone issues #9397/#7967.)
+        "Proton is blocking this app with a CAPTCHA (code 9001). This is Proton's security on \
+         non-browser apps, and waiting will not clear it. Turn off Proton Sentinel in your Proton \
+         account (Settings, then Security), sign in once at proton.me in a browser, then re-add \
+         the remote here."
             .to_string()
     } else if s.contains("accessdenied")
         || s.contains("signaturedoesnotmatch")
@@ -480,15 +489,23 @@ mod tests {
         assert!(friendly_connect_error("dial tcp: i/o timeout").contains("Could not reach"));
         // Unknown errors fall back to the trimmed raw text.
         assert_eq!(friendly_connect_error("  weird thing  "), "weird thing");
-        // Proton's anti-bot CAPTCHA block (Code 9001 / 2028) gets a wait-and-retry explanation.
-        assert!(
+        // Proton's CAPTCHA wall (Code=9001) is the Sentinel block: point the user at Sentinel, not
+        // at "just wait" (waiting does not clear 9001). Verified cause, see rclone #9397/#7967.
+        let captcha =
             friendly_connect_error("422 ... please complete CAPTCHA (Code=9001, Status=422)")
-                .to_lowercase()
-                .contains("proton")
+                .to_lowercase();
+        assert!(
+            captcha.contains("proton") && captcha.contains("sentinel"),
+            "{captcha}"
         );
-        assert!(friendly_error("Code=2028 security block")
-            .to_lowercase()
-            .contains("wait"));
+        // Code=2028 is a real rate limit (HTTP 429): tell them to wait, and do NOT misdirect them
+        // to Sentinel (that is the 9001 remedy).
+        let ratelimit =
+            friendly_error("Too many recent login attempts (Code=2028, Status=429)").to_lowercase();
+        assert!(
+            ratelimit.contains("wait") && !ratelimit.contains("sentinel"),
+            "{ratelimit}"
+        );
     }
 
     #[test]

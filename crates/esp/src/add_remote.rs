@@ -85,9 +85,10 @@ fn backend_hint(backend: &str) -> Option<&'static str> {
     match backend {
         "protondrive" => Some(
             "If you use two-factor authentication, put your current 6-digit code in the 2fa field. \
-             A separate mailbox password (two-password accounts) goes under Advanced settings. If a \
-             sign-in is refused right after several tries, wait a few minutes: Proton temporarily \
-             blocks repeated attempts.",
+             A separate mailbox password (two-password accounts) goes under Advanced settings. If \
+             sign-in keeps failing with a CAPTCHA or security block, turn off Proton Sentinel in \
+             your Proton account (Settings, then Security): it blocks non-browser apps like this \
+             one. Sign in once at proton.me in a browser first, then try again here.",
         ),
         "mega" => Some(
             "Use your MEGA email and password. If you have two-factor authentication on, add your \
