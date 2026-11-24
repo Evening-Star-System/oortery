@@ -624,7 +624,7 @@ fn internxt_step(
                 let (tx, rx) = async_channel::bounded(1);
                 std::thread::spawn(move || {
                     let _ = tx.send_blocking(
-                        esp_core::internxt::install_cli().map_err(|e| e.to_string()),
+                        esp_core::internxt::install_cli().map_err(|e| format!("{e:#}")),
                     );
                 });
                 let (ui2, b2, again2) = (ui.clone(), b.clone(), again.clone());
@@ -670,7 +670,7 @@ fn internxt_step(
                     let r = esp_core::internxt::login(|u| {
                         let _ = url_tx.send_blocking(u.to_string());
                     })
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| format!("{e:#}"));
                     let _ = tx.send_blocking(r);
                 });
                 // Open the sign-in URL through the desktop's own launcher the moment the CLI hands it
@@ -726,8 +726,9 @@ fn internxt_step(
                 let (tx, rx) = async_channel::bounded(1);
                 let n = name.clone();
                 std::thread::spawn(move || {
-                    let _ = tx
-                        .send_blocking(esp_core::internxt::connect(&n).map_err(|e| e.to_string()));
+                    let _ = tx.send_blocking(
+                        esp_core::internxt::connect(&n).map_err(|e| format!("{e:#}")),
+                    );
                 });
                 let (ui2, dlg2, b2) = (ui.clone(), dialog.clone(), b.clone());
                 glib::spawn_future_local(async move {
