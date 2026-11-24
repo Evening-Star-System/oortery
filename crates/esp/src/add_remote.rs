@@ -8,11 +8,10 @@ use gtk::glib;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// The top providers shown under "Popular", by real-world popularity: four big consumer clouds, a
-/// cheap object store, and a privacy-first cloud. Six keeps the 2-column grid square (3 even rows).
-/// A key is matched to an easy preset first (B2), else to the rclone provider of the same name
-/// (which decides OAuth vs form). Easy to re-order.
-const POPULAR: &[&str] = &["drive", "dropbox", "onedrive", "box", "b2", "pcloud"];
+/// The top consumer clouds shown under "Popular", by real-world popularity. Six keeps the 2-column
+/// grid square (3 even rows). Each maps to the rclone provider of the same name (which decides OAuth
+/// vs form). Object stores (S3/R2/B2) live in their own section, not here. Easy to re-order.
+const POPULAR: &[&str] = &["drive", "dropbox", "onedrive", "box", "pcloud", "mega"];
 
 pub fn present(ui: &Rc<Ui>) {
     let dialog = adw::Dialog::builder()
@@ -169,10 +168,6 @@ fn picker_page(
         list_s.invalidate_filter();
     });
 
-    let scroll = gtk::ScrolledWindow::new();
-    scroll.set_vexpand(true);
-    scroll.set_child(Some(&list));
-
     // The handful of providers most people actually reach for, offered first so the long list is
     // optional. OAuth clouds route to one-tap sign-in; the object store (B2) uses its easy preset
     // form. Ordered by real-world popularity; trivial to re-order or extend.
@@ -213,6 +208,35 @@ fn picker_page(
             presets_list.append(&card);
         }
     }
+    // Object storage (S3, R2, B2, and any S3-compatible store): the guided presets, which assemble
+    // the real rclone config from a short, bucket-scoped form. Surfaced on their own so R2 and S3 are
+    // reachable through the easy flow instead of falling through to the raw multi-field `s3` backend.
+    let obj_label = gtk::Label::new(Some("Object storage"));
+    obj_label.set_xalign(0.0);
+    obj_label.add_css_class("heading");
+    let obj_list = gtk::FlowBox::new();
+    obj_list.set_selection_mode(gtk::SelectionMode::None);
+    obj_list.set_min_children_per_line(1);
+    obj_list.set_max_children_per_line(2);
+    obj_list.set_column_spacing(10);
+    obj_list.set_row_spacing(10);
+    obj_list.set_homogeneous(true);
+    for preset in esp_core::presets::PRESETS {
+        let card = provider_card("drive-harddisk-symbolic", preset.name, preset.blurb);
+        let (ui2, nav2, dlg2) = (ui.clone(), nav.clone(), dialog.clone());
+        card.connect_clicked(move |_| {
+            nav2.push(&preset_page(&ui2, preset, &dlg2));
+        });
+        obj_list.append(&card);
+    }
+    let obj_exp = gtk::Expander::new(None);
+    obj_exp.set_label_widget(Some(&obj_label));
+    obj_exp.set_expanded(true);
+    let obj_body = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    obj_body.set_margin_top(8);
+    obj_body.append(&obj_list);
+    obj_exp.set_child(Some(&obj_body));
+
     let all_label = gtk::Label::new(Some("Or pick any provider"));
     all_label.set_xalign(0.0);
     all_label.add_css_class("heading");
@@ -234,13 +258,21 @@ fn picker_page(
     body.set_margin_start(12);
     body.set_margin_end(12);
     body.append(&popular_exp);
+    body.append(&obj_exp);
     body.append(&all_label);
     body.append(&search);
-    body.append(&scroll);
+    body.append(&list);
+
+    // The whole picker scrolls as one unit (Popular + Object storage + the full provider list), so
+    // adding sections never overflows the dialog; it just scrolls.
+    let body_scroll = gtk::ScrolledWindow::new();
+    body_scroll.set_vexpand(true);
+    body_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    body_scroll.set_child(Some(&body));
 
     let tv = adw::ToolbarView::new();
     tv.add_top_bar(&adw::HeaderBar::new());
-    tv.set_content(Some(&body));
+    tv.set_content(Some(&body_scroll));
 
     adw::NavigationPage::builder()
         .title("Add a remote")
