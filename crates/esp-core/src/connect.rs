@@ -115,8 +115,12 @@ fn run_credential_flow(
     backend: &str,
     answers: &[(String, String)],
 ) -> Result<()> {
-    // Seed the credentials up front so the backend's first state can log in. rclone obscures
-    // IsPassword values itself (same as `config create`), so pass plaintext from the form.
+    // Seed the credentials up front so the backend's first state can log in. CAUTION: unlike the CLI
+    // `rclone config create`, this rc path does NOT obscure IsPassword values before the backend's
+    // Config login reads them. A backend that reveals its stored pass (e.g. Internxt) will then see
+    // garbage and report "Wrong login credentials". If a backend is ever added to needs_login_flow,
+    // obscure the password (rclone obscure / core obscure) before inserting it here. This is why
+    // Internxt was moved off this path to create_remote. [reviewer: do not "simplify" back to plaintext]
     let mut parameters = serde_json::Map::new();
     for (k, v) in answers {
         if !v.is_empty() {
@@ -145,12 +149,21 @@ fn run_credential_flow(
     Ok(())
 }
 
-/// Backends whose `config create` login is a multi-state flow that must be driven to completion
-/// (not a one-shot) or the remote is saved missing its encryption material. Internxt is the known
-/// case: it writes the mnemonic only in a later "login" state. These go through `credential_connect`
-/// instead of `create_remote`.
-pub fn needs_login_flow(backend: &str) -> bool {
-    matches!(backend, "internxt")
+/// Backends that MUST be created through the multi-state rc `config/create` flow
+/// (`credential_connect`) rather than a one-shot `rclone config create`. Currently NONE.
+///
+/// Internxt was listed here on two beliefs that both proved false (verified 2026-11-24 against a real
+/// account). First, that a one-shot create saved a remote with no mnemonic; in fact `rclone config
+/// create <n> internxt email <e> pass <p> --non-interactive` logs in, writes the mnemonic, and lists
+/// files. Second, and the real bug: the rc flow seeded the password as PLAINTEXT (see
+/// `run_credential_flow`), but Internxt's login reveals/de-obscures the stored pass, so plaintext
+/// became garbage and the backend returned "Wrong login credentials (status 401)" on CORRECT
+/// credentials. That bogus 401 is what sent us chasing a non-existent Internxt outage and building a
+/// whole CLI/WebDAV bridge. Internxt now goes through `create_remote` (the CLI path, which obscures
+/// the password the way the backend expects) like any other form backend. Keep this returning false
+/// unless a backend genuinely needs the staged flow AND its password is obscured before seeding.
+pub fn needs_login_flow(_backend: &str) -> bool {
+    false
 }
 
 /// Cancel an in-progress browser sign-in (closes rclone's local auth server).
