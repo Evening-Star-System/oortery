@@ -572,18 +572,23 @@ fn build_ui(app: &adw::Application) {
         row.set_child(Some(&hbox));
         nav_list.append(&row);
     }
+    // Switch pages only on genuine activation (click / Enter), NOT on mere selection. GtkListBox
+    // re-emits row-selected when it is unmapped/remapped (which happens every time the sidebar
+    // collapses into an overlay), and driving the page off selection made those spurious events jump
+    // to a different tab. Activation only fires from real user intent, so the page stays put.
     let stack_for_nav = stack.clone();
-    nav_list.connect_row_selected(move |_, row| {
-        if let Some(row) = row {
-            if let Some(page) = PAGES.get(row.index() as usize) {
-                stack_for_nav.set_visible_child_name(page.name);
-            }
+    nav_list.connect_row_activated(move |_, row| {
+        if let Some(page) = PAGES.get(row.index() as usize) {
+            stack_for_nav.set_visible_child_name(page.name);
         }
     });
     let start_idx = aid("ESP_PAGE")
         .and_then(|name| PAGES.iter().position(|p| p.name == name))
         .unwrap_or(0) as i32;
     nav_list.select_row(nav_list.row_at_index(start_idx).as_ref());
+    if let Some(p) = PAGES.get(start_idx as usize) {
+        stack.set_visible_child_name(p.name);
+    }
 
     let brand_text = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let b1 = gtk::Label::new(Some("Oortery"));
@@ -658,10 +663,18 @@ fn build_ui(app: &adw::Application) {
     menu_btn.set_popover(Some(&menu_pop));
     content_header.pack_end(&menu_btn);
     let title_for_notify = title.clone();
+    let nav_for_notify = nav_list.clone();
     stack.connect_visible_child_notify(move |s| {
         if let Some(name) = s.visible_child_name() {
-            if let Some(p) = PAGES.iter().find(|p| p.name == name) {
+            if let Some((idx, p)) = PAGES.iter().enumerate().find(|(_, p)| p.name == name) {
                 title_for_notify.set_title(p.title);
+                // Keep the sidebar highlight on the page actually shown (resyncs any selection drift
+                // from a sidebar collapse/expand).
+                if let Some(row) = nav_for_notify.row_at_index(idx as i32) {
+                    if !row.is_selected() {
+                        nav_for_notify.select_row(Some(&row));
+                    }
+                }
             }
         }
     });
@@ -686,6 +699,27 @@ fn build_ui(app: &adw::Application) {
         .sync_create()
         .bidirectional()
         .build();
+    // When the sidebar collapses or expands, GtkListBox can churn its selection; snap the highlight
+    // back to the page the stack is actually showing so the active tab never drifts.
+    let resync_nav = {
+        let nav = nav_list.clone();
+        let stack = stack.clone();
+        move || {
+            if let Some(name) = stack.visible_child_name() {
+                if let Some(idx) = PAGES.iter().position(|p| p.name == name) {
+                    if let Some(row) = nav.row_at_index(idx as i32) {
+                        if !row.is_selected() {
+                            nav.select_row(Some(&row));
+                        }
+                    }
+                }
+            }
+        }
+    };
+    split.connect_collapsed_notify({
+        let r = resync_nav.clone();
+        move |_| r()
+    });
 
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&split));
