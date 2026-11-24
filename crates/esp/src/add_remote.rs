@@ -44,6 +44,10 @@ fn first_line(s: &str) -> &str {
 }
 
 /// A re-render hook for the Internxt wizard: an action's success calls it to advance the step.
+/// DORMANT: the Internxt bridge wizard (internxt_page/internxt_step and these helpers) is no longer
+/// the default path (Internxt now uses rclone's native backend via the standard form). It is kept as
+/// a fallback for 2FA accounts; remove the whole bridge layer once we decide 2FA is not worth it.
+#[allow(dead_code)]
 type RenderHook = Rc<dyn Fn()>;
 
 /// A big, friendly provider card for the Popular grid: an icon, the human name, and a plain
@@ -81,6 +85,7 @@ fn provider_card(icon: &str, title: &str, desc: &str) -> gtk::Button {
 /// It pulses on a timer so the step clearly reads as working, not frozen. Returns the bar and a
 /// `stop` closure; call `stop()` once the step finishes to end the pulse (it also removes the bar
 /// from its parent). Call it exactly once.
+#[allow(dead_code)]
 fn pulsing_bar() -> (gtk::ProgressBar, impl Fn()) {
     let bar = gtk::ProgressBar::new();
     bar.set_pulse_step(0.08);
@@ -107,8 +112,7 @@ fn pulsing_bar() -> (gtk::ProgressBar, impl Fn()) {
 }
 
 /// A plain-language note for backends with a known gotcha, shown above the form so a new user is
-/// not left guessing. (Internxt has no entry here: it routes to its own guided helper, not this
-/// form, because its native login is dead.)
+/// not left guessing.
 fn backend_hint(backend: &str) -> Option<&'static str> {
     match backend {
         "protondrive" => Some(
@@ -128,6 +132,10 @@ fn backend_hint(backend: &str) -> Option<&'static str> {
         "pikpak" => Some(
             "Use your PikPak username and password. If sign-in is refused, finish a login once in \
              the PikPak app or website first (it can require a one-time human check), then retry.",
+        ),
+        "internxt" => Some(
+            "Use your Internxt email and password. Your files stay end-to-end encrypted. This method \
+             does not support two-factor authentication, so if you have 2FA on, turn it off for now.",
         ),
         "b2" => Some("Account is your Backblaze keyID, and Key is the applicationKey."),
         "webdav" => Some(
@@ -469,6 +477,7 @@ fn preset_page(
 /// sign in through the browser and stand up a local bridge, ending with a working WebDAV remote.
 /// Each CLI call runs off the UI thread (Node is slow to start; blocking here would freeze the app,
 /// the same failure mode we fixed for mounts).
+#[allow(dead_code)]
 fn internxt_page(ui: &Rc<Ui>, dialog: &adw::Dialog) -> adw::NavigationPage {
     let prefs = adw::PreferencesPage::new();
 
@@ -558,6 +567,7 @@ fn internxt_page(ui: &Rc<Ui>, dialog: &adw::Dialog) -> adw::NavigationPage {
 
 /// Populate the Internxt wizard's step area for the current `readiness`. `again` re-renders the
 /// step after an action succeeds, advancing the wizard.
+#[allow(dead_code)]
 fn internxt_step(
     ui: &Rc<Ui>,
     dialog: &adw::Dialog,
@@ -757,11 +767,10 @@ fn config_page(
     provider: &esp_core::Provider,
     dialog: &adw::Dialog,
 ) -> adw::NavigationPage {
-    // Internxt's native login is dead (they moved to browser auth), so route it to a guided helper
-    // that connects through Internxt's own CLI WebDAV bridge instead of the 401-guaranteed form.
-    if provider.name == "internxt" {
-        return internxt_page(ui, dialog);
-    }
+    // Internxt connects through rclone's own native backend (verified working with email + password,
+    // 2026-11-24), so it uses the standard form like any other provider. The old browser/CLI bridge
+    // helper (internxt_page, and esp_core::internxt) is kept only as a fallback for accounts with
+    // two-factor on, which the native backend has no field for.
     let prefs = adw::PreferencesPage::new();
     let pretty = first_line(&provider.description).to_string();
 
