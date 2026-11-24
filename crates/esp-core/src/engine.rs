@@ -365,7 +365,16 @@ pub fn set_transfer_rate(port: u16, rate: &str) -> Result<()> {
     Ok(())
 }
 
-/// The mounts the daemon currently serves.
+/// The mounts that are actually live right now.
+///
+/// We ask the daemon (`mount/listmounts`) but then keep only the mounts that still exist in the
+/// kernel's mount table. The daemon's registry can lag reality: when a clean unmount reports the
+/// mount busy, `unmount()` falls back to a lazy `fusermount -uz` detach, which removes the mount
+/// from the namespace immediately but leaves rclone's `liveMounts` entry in place until the last
+/// open handle closes. Without this cross-check the UI re-queries, still sees the stale entry, and
+/// a row the user just unmounted never flips back to "Mount". Intersecting with `/proc/self/mounts`
+/// makes "is it mounted?" reflect what the OS actually has. On a platform without `/proc` (the
+/// cross-platform roadmap), we fall back to the daemon's list unfiltered.
 pub fn list_mounts(port: u16) -> Result<Vec<Mount>> {
     let reply = rc_at(port, "mount/listmounts", serde_json::json!({}))?;
     let arr = reply
@@ -373,6 +382,7 @@ pub fn list_mounts(port: u16) -> Result<Vec<Mount>> {
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+    let live = kernel_mount_points();
     Ok(arr
         .iter()
         .filter_map(|m| {
@@ -381,7 +391,46 @@ pub fn list_mounts(port: u16) -> Result<Vec<Mount>> {
                 mount_point: m.get("MountPoint")?.as_str()?.to_string(),
             })
         })
+        .filter(|m| live.as_ref().is_none_or(|set| set.contains(&m.mount_point)))
         .collect())
+}
+
+/// The set of mount points the kernel currently has, read from `/proc/self/mounts`. Returns `None`
+/// when `/proc` is unavailable (not Linux, or unreadable), so callers can fall back to trusting the
+/// daemon rather than wrongly reporting everything as unmounted. Field 2 of each line is the mount
+/// point with spaces and other specials octal-escaped (e.g. `\040`), which we decode.
+fn kernel_mount_points() -> Option<std::collections::HashSet<String>> {
+    let table = std::fs::read_to_string("/proc/self/mounts").ok()?;
+    Some(
+        table
+            .lines()
+            .filter_map(|line| line.split(' ').nth(1).map(unescape_mount_field))
+            .collect(),
+    )
+}
+
+/// Decode the octal escapes the kernel uses in `/proc/self/mounts` fields (`\040` space, `\011`
+/// tab, `\012` newline, `\134` backslash), so a mount point with a space compares equal to the
+/// path we hand rclone.
+fn unescape_mount_field(field: &str) -> String {
+    if !field.contains('\\') {
+        return field.to_string();
+    }
+    let bytes = field.as_bytes();
+    let mut out = String::with_capacity(field.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 3 < bytes.len() {
+            if let Ok(code) = u8::from_str_radix(&field[i + 1..i + 4], 8) {
+                out.push(code as char);
+                i += 4;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }
 
 /// One file currently being transferred, from `core/stats`'s `transferring` array.
@@ -434,6 +483,21 @@ mod tests {
         assert!(wire.contains("dirsOnly"), "wire: {wire}");
         assert!(wire.contains("noModTime"), "wire: {wire}");
         assert!(wire.contains("noMimeType"), "wire: {wire}");
+    }
+
+    #[test]
+    fn unescapes_proc_mounts_octal_fields() {
+        // A plain path is returned untouched (the fast path), and the kernel's octal escapes for
+        // space / tab / backslash decode back to the literal path we hand rclone.
+        assert_eq!(
+            unescape_mount_field("/home/u/Oortery/r2"),
+            "/home/u/Oortery/r2"
+        );
+        assert_eq!(
+            unescape_mount_field("/home/u/My\\040Cloud"),
+            "/home/u/My Cloud"
+        );
+        assert_eq!(unescape_mount_field("/a\\011b\\134c"), "/a\tb\\c");
     }
 
     #[test]
