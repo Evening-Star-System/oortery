@@ -263,8 +263,23 @@ pub fn connect(name: &str) -> Result<()> {
         ],
     )
     .context("creating the Internxt WebDAV remote")?;
-    verify_remote(name).context("verifying the Internxt remote")?;
+    // The bridge accepts TCP as soon as it binds, but its WebDAV layer (database + drive metadata)
+    // can take a few more seconds to actually serve a listing, so a single immediate verify raced it
+    // and failed. Retry with a short backoff, surfacing the last real error if it never comes good.
+    verify_remote_ready(name).context("verifying the Internxt remote")?;
     Ok(())
+}
+
+/// Verify the bridge remote, retrying for a short while because the WebDAV layer serves a beat after
+/// the socket opens. Returns the last error if it never lists within the window.
+fn verify_remote_ready(name: &str) -> Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(24);
+    let mut last = verify_remote(name);
+    while last.is_err() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        last = verify_remote(name);
+    }
+    last
 }
 
 /// Install the Internxt CLI on demand, into a prefix under the config dir (no root needed), so only
